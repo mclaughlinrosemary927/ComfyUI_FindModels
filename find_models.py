@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 import tempfile
+import shutil
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ QUARK_CATEGORY_FOLDERS = {
     "loras": {"loras", "lora"},
     "vae": {"vae"},
     "controlnet": {"controlnet"},
+    "clip_vision": {"clip_vision"},
     "text_encoders": {"text_encoders", "clip"},
     "diffusion_models": {"diffusion_models", "unet"},
     "upscale_models": {"upscale_models"},
@@ -48,10 +50,22 @@ DOWNLOAD_CATEGORY_ALIASES = {
     "loras": ("loras",),
     "vae": ("vae",),
     "controlnet": ("controlnet",),
+    "clip_vision": ("clip_vision",),
     "text_encoders": ("text_encoders", "clip"),
     "diffusion_models": ("diffusion_models", "unet"),
     "upscale_models": ("upscale_models",),
     "embeddings": ("embeddings",),
+}
+OFFICIAL_MODEL_FOLDERS = {
+    "checkpoints": "checkpoints",
+    "loras": "loras",
+    "vae": "vae",
+    "controlnet": "controlnet",
+    "clip_vision": "clip_vision",
+    "text_encoders": "text_encoders",
+    "diffusion_models": "diffusion_models",
+    "upscale_models": "upscale_models",
+    "embeddings": "embeddings",
 }
 
 
@@ -122,6 +136,58 @@ def _clear_filename_cache(category: str) -> None:
     if isinstance(cache, dict):
         for candidate in DOWNLOAD_CATEGORY_ALIASES.get(category, (category,)):
             cache.pop(candidate, None)
+
+
+def _comfy_model_root() -> Path:
+    base = getattr(folder_paths, "models_dir", None)
+    if not base:
+        checkpoint_paths = folder_paths.get_folder_paths("checkpoints")
+        if not checkpoint_paths:
+            raise web.HTTPBadRequest(text="无法确定 ComfyUI models 目录")
+        base = Path(checkpoint_paths[0]).parent
+    return Path(base).resolve()
+
+
+def _classify_existing_file(path: Path) -> str | None:
+    text = path.as_posix().lower()
+    name = path.name.lower()
+    if any(term in text for term in ("lora", "lycoris")):
+        return "loras"
+    if "controlnet" in text or "control_net" in text:
+        return "controlnet"
+    if "clip_vision" in text:
+        return "clip_vision"
+    if any(term in text for term in ("text_encoder", "/clip/", "/t5")):
+        return "text_encoders"
+    if "embedding" in text:
+        return "embeddings"
+    if any(term in text for term in ("upscale", "esrgan", "rife", "frame_interpolation")):
+        return "upscale_models"
+    if "/vae" in text or name.startswith("vae") or "_vae" in name:
+        return "vae"
+    if any(term in text for term in ("diffusion_model", "/unet/", "flux", "wan")):
+        return "diffusion_models"
+    if path.suffix.lower() in MODEL_EXTENSIONS:
+        return "checkpoints"
+    return None
+
+
+def _organize_plan() -> list[dict[str, str]]:
+    root = _comfy_model_root()
+    plan = []
+    for source in root.rglob("*"):
+        if not source.is_file() or source.suffix.lower() not in MODEL_EXTENSIONS:
+            continue
+        category = _classify_existing_file(source)
+        if not category:
+            continue
+        target_dir = (root / OFFICIAL_MODEL_FOLDERS[category]).resolve()
+        if source.parent == target_dir or target_dir in source.parents:
+            continue
+        target = target_dir / source.name
+        if not target.exists():
+            plan.append({"category": category, "source": str(source), "target": str(target)})
+    return plan
 
 
 async def _get_json(session: aiohttp.ClientSession, url: str) -> Any:
@@ -333,7 +399,31 @@ async def find_sources(request: web.Request) -> web.Response:
     candidates = [
         candidate for candidate in [*checked_web, *checked_quark] if isinstance(candidate, dict)
     ]
-    return web.json_response({"name": name, "candidates": candidates[:12]})
+    return web.json_response({"name": name, "candidates": candidates[:12], "quark_libraries": QUARK_MODEL_LIBRARIES})
+
+
+@PromptServer.instance.routes.get("/findmodels/organize/plan")
+async def organize_plan(request: web.Request) -> web.Response:
+    plan = _organize_plan()
+    return web.json_response({"count": len(plan), "moves": plan})
+
+
+@PromptServer.instance.routes.post("/findmodels/organize/apply")
+async def organize_apply(request: web.Request) -> web.Response:
+    root = _comfy_model_root()
+    moved = 0
+    for item in _organize_plan():
+        source = Path(item["source"]).resolve()
+        target = Path(item["target"]).resolve()
+        if root not in source.parents or root not in target.parents or target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(target))
+        moved += 1
+    cache = getattr(folder_paths, "filename_list_cache", None)
+    if isinstance(cache, dict):
+        cache.clear()
+    return web.json_response({"moved": moved})
 
 
 async def _quark_download_url(session: aiohttp.ClientSession, payload: dict[str, Any]) -> str:

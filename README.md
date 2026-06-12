@@ -20,6 +20,8 @@ candidate direct-download URLs from Civitai and Hugging Face.
   ComfyUI model folder.
 - Shows candidate file sizes and loads successfully downloaded files into their workflow nodes.
 - Searches the configured Quark Netdisk libraries directly for missing model filenames.
+- Previews and organizes existing model files into official ComfyUI model directories
+  without overwriting files or moving anything outside the configured models root.
 - Does not move, delete, or overwrite model files.
 
 ## Installation

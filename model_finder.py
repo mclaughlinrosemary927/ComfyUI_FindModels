@@ -16,16 +16,30 @@ MODEL_EXTENSIONS = {
     ".pth",
     ".safetensors",
 }
+STANDARD_LOADER_HINTS = (
+    "checkpoint",
+    "lora",
+    "vae",
+    "controlnet",
+    "clip",
+    "textencoder",
+    "text_encoder",
+    "unet",
+    "diffusion",
+    "upscale",
+    "embedding",
+)
 
 CATEGORY_HINTS = (
+    ("upscale_models", ("rife", "frame_interpolation", "film", "upscale", "esrgan", "super_resolution", "superresolution")),
     ("controlnet", ("controlnet", "control_net", "control")),
-    ("upscale_models", ("upscale", "esrgan", "super_resolution", "superresolution")),
     ("embeddings", ("embedding", "textual_inversion")),
     ("vae", ("vae",)),
     ("loras", ("lora", "lycoris")),
+    ("clip_vision", ("clip_vision", "clip vision")),
     ("text_encoders", ("text_encoder", "text encoder", "clip", "t5")),
     ("diffusion_models", ("diffusion_model", "diffusion model", "unet")),
-    ("checkpoints", ("checkpoint", "ckpt", "model_name", "model name", "loader")),
+    ("checkpoints", ("checkpoint", "ckpt", "model_name", "model name")),
 )
 
 CATEGORY_ALIASES = {
@@ -33,6 +47,7 @@ CATEGORY_ALIASES = {
     "loras": ("loras",),
     "vae": ("vae",),
     "controlnet": ("controlnet",),
+    "clip_vision": ("clip_vision",),
     "text_encoders": ("text_encoders", "clip"),
     "diffusion_models": ("diffusion_models", "unet"),
     "upscale_models": ("upscale_models",),
@@ -42,6 +57,7 @@ CATEGORY_ALIASES = {
         "loras",
         "vae",
         "controlnet",
+        "clip_vision",
         "text_encoders",
         "clip",
         "diffusion_models",
@@ -59,6 +75,7 @@ class Reference:
     node_id: str | None = None
     widget: str | None = None
     node_type: str | None = None
+    strict: bool = True
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -67,6 +84,7 @@ class Reference:
             "node_id": self.node_id,
             "widget": self.widget,
             "node_type": self.node_type,
+            "strict": self.strict,
         }
 
 
@@ -110,6 +128,7 @@ def extract_references(payload: Any) -> list[Reference]:
             node_id=None if node_id is None else str(node_id),
             widget=None if widget is None else str(widget),
             node_type=None if node_type is None else str(node_type),
+            strict=any(term in re.sub(r"[^a-z0-9_]+", "", str(node_type or "").lower()) for term in STANDARD_LOADER_HINTS),
         )
         found[(ref.name.lower(), ref.category, ref.node_id, ref.widget)] = ref
 
@@ -147,12 +166,19 @@ def extract_references(payload: Any) -> list[Reference]:
 
     walk(payload)
     references = list(found.values())
-    located = {(ref.name.lower(), ref.category) for ref in references if ref.node_id is not None}
-    return [
+    located_names = {ref.name.lower() for ref in references if ref.node_id is not None}
+    filtered = [
         ref
         for ref in references
-        if ref.node_id is not None or (ref.name.lower(), ref.category) not in located
+        if ref.node_id is not None or ref.name.lower() not in located_names
     ]
+    deduplicated: dict[tuple[str, str | None, str | None], Reference] = {}
+    for ref in filtered:
+        key = (ref.name.lower(), ref.node_id, ref.widget)
+        current = deduplicated.get(key)
+        if current is None or current.category == "unknown":
+            deduplicated[key] = ref
+    return list(deduplicated.values())
 
 
 def load_installed(get_filename_list: Callable[[str], Iterable[str]]) -> dict[str, list[str]]:
@@ -189,6 +215,8 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
             best = (score, candidate_path, category, reason)
 
     if best is None or best[0] < 0.62:
+        if not reference.strict:
+            return {"status": "external", "match": None}
         return {"status": "missing", "match": None}
 
     score, name, category, reason = best
@@ -211,13 +239,22 @@ def analyze(payload: Any, get_filename_list: Callable[[str], Iterable[str]]) -> 
     results = []
     for reference in references:
         results.append({**reference.as_dict(), **match_reference(reference, installed)})
-    unresolved = [item for item in results if item["status"] != "installed"]
+    unresolved_by_name: dict[str, dict[str, Any]] = {}
+    for item in results:
+        if item["status"] not in {"adaptable", "missing"}:
+            continue
+        key = item["name"].lower()
+        current = unresolved_by_name.get(key)
+        if current is None or (current["status"] == "missing" and item["status"] == "adaptable"):
+            unresolved_by_name[key] = item
+    unresolved = list(unresolved_by_name.values())
     return {
         "summary": {
             "references": len(results),
             "installed": sum(item["status"] == "installed" for item in results),
             "adaptable": sum(item["status"] == "adaptable" for item in results),
             "missing": sum(item["status"] == "missing" for item in results),
+            "external": sum(item["status"] == "external" for item in results),
             "unresolved": len(unresolved),
         },
         "models": unresolved,

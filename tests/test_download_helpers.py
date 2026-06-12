@@ -8,6 +8,9 @@ class Routes:
     def post(self, path):
         return lambda function: function
 
+    def get(self, path):
+        return lambda function: function
+
 
 server = types.ModuleType("server")
 server.PromptServer = types.SimpleNamespace(instance=types.SimpleNamespace(routes=Routes()))
@@ -15,6 +18,7 @@ folder_paths = types.ModuleType("folder_paths")
 folder_paths.get_filename_list = lambda category: []
 folder_paths.get_folder_paths = lambda category: [str(Path.cwd() / "models" / category)]
 folder_paths.filename_list_cache = {}
+folder_paths.models_dir = str(Path.cwd() / "models")
 sys.modules.setdefault("server", server)
 sys.modules.setdefault("folder_paths", folder_paths)
 sys.path.insert(0, str(Path.cwd().parent))
@@ -29,6 +33,8 @@ from ComfyUI_FindModels.find_models import (
     _safe_filename,
     _size_value,
     _target_directory,
+    _classify_existing_file,
+    _organize_plan,
 )
 
 
@@ -92,6 +98,27 @@ class DownloadHelperTests(unittest.TestCase):
                 "https://pan.quark.cn/s/4680ac8665162",
             ],
         )
+
+    def test_classifies_files_for_official_folders(self):
+        self.assertEqual(_classify_existing_file(Path("misc/loras/hero.safetensors")), "loras")
+        self.assertEqual(_classify_existing_file(Path("misc/rife47.pth")), "upscale_models")
+        self.assertEqual(_classify_existing_file(Path("misc/vae_model.safetensors")), "vae")
+
+    def test_organize_plan_moves_only_misplaced_files(self):
+        root = Path(folder_paths.models_dir)
+        misplaced = root / "checkpoints" / "hero_lora.safetensors"
+        correct = root / "loras" / "people" / "correct.safetensors"
+        misplaced.parent.mkdir(parents=True, exist_ok=True)
+        correct.parent.mkdir(parents=True, exist_ok=True)
+        misplaced.write_bytes(b"x")
+        correct.write_bytes(b"x")
+        try:
+            plan = _organize_plan()
+            self.assertTrue(any(item["source"] == str(misplaced.resolve()) for item in plan))
+            self.assertFalse(any(item["source"] == str(correct.resolve()) for item in plan))
+        finally:
+            misplaced.unlink()
+            correct.unlink()
 
 
 if __name__ == "__main__":

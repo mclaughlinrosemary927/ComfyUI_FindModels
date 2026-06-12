@@ -40,6 +40,12 @@ async function post(path, body) {
   return response.json();
 }
 
+async function get(path) {
+  const response = await api.fetchApi(path);
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
 function findTargetWidget(node, model) {
   const widgets = node?.widgets || [];
   return widgets.find((item) => item.name === model.widget)
@@ -99,6 +105,7 @@ function ensurePanel() {
     <div class="fm-actions">
       <button data-action="scan">扫描当前工作流</button>
       <button data-action="adapt">一键加载模型</button>
+      <button data-action="organize">整理模型文件夹</button>
     </div>
     <div class="fm-summary">尚未扫描</div><div class="fm-list"></div>`;
   document.body.appendChild(panel);
@@ -119,6 +126,28 @@ function ensurePanel() {
     button.disabled = false;
     if (count) window.setTimeout(() => scan(false), 100);
   };
+  panel.querySelector('[data-action="organize"]').onclick = async () => {
+    const button = panel.querySelector('[data-action="organize"]');
+    button.disabled = true;
+    try {
+      const plan = await get("/findmodels/organize/plan");
+      if (!plan.count) {
+        panel.querySelector(".fm-summary").textContent = "模型文件夹已经符合官方目录结构。";
+        return;
+      }
+      const preview = plan.moves.slice(0, 20).map((item) =>
+        `${item.category}: ${item.source.split(/[\\/]/).pop()}`,
+      ).join("\n");
+      if (!window.confirm(`将按 ComfyUI 官方目录整理 ${plan.count} 个模型文件。\n不会覆盖已有文件。\n\n${preview}\n\n确认移动？`)) return;
+      const result = await post("/findmodels/organize/apply", {});
+      panel.querySelector(".fm-summary").textContent = `已整理 ${result.moved} 个模型文件。请重启 ComfyUI。`;
+      window.setTimeout(() => scan(false), 300);
+    } catch (error) {
+      panel.querySelector(".fm-summary").textContent = `整理失败：${error.message}`;
+    } finally {
+      button.disabled = false;
+    }
+  };
   panel.addEventListener("click", async (event) => {
     const sourceButton = event.target.closest("[data-source]");
     if (sourceButton) {
@@ -132,7 +161,10 @@ function ensurePanel() {
           category: model.category,
         });
         const links = data.candidates.map((item) => sourceHtml(item, model)).join("");
-        target.innerHTML = links || "<span>未找到文件名完全一致且可直接下载的模型</span>";
+        const quarkFallback = data.quark_libraries.map((item) =>
+          `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.name)}备用查找</a>`,
+        ).join("");
+        target.innerHTML = `${links || "<span>未找到文件名完全一致且可直接下载的模型</span>"}${quarkFallback}`;
       } catch (error) {
         target.textContent = `查询失败：${error.message}`;
       } finally {

@@ -21,6 +21,8 @@ class ModelFinderTests(unittest.TestCase):
     def test_classification(self):
         self.assertEqual(classify("LoraLoader lora_name"), "loras")
         self.assertEqual(classify("ControlNetLoader control_net_name"), "controlnet")
+        self.assertEqual(classify("RIFE VFI rife47.pth"), "upscale_models")
+        self.assertEqual(classify("Load CLIP Vision clip_vision_h.safetensors"), "clip_vision")
 
     def test_normalized_stem_removes_common_precision_suffix(self):
         self.assertEqual(normalized_stem("Hero_v2_fp16.safetensors"), "hero")
@@ -76,6 +78,25 @@ class ModelFinderTests(unittest.TestCase):
         refs = extract_references(payload)
         self.assertEqual(len(refs), 1)
         self.assertEqual(refs[0].node_id, "3")
+
+    def test_hides_external_custom_node_model_references(self):
+        payload = {
+            "nodes": [{"id": 8, "type": "CustomGGUFNode", "widgets": [{"name": "model", "value": "model.gguf"}]}]
+        }
+        result = analyze(payload, lambda category: [])
+        self.assertEqual(result["summary"]["external"], 1)
+        self.assertEqual(result["models"], [])
+
+    def test_shows_same_missing_file_only_once(self):
+        payload = {
+            "nodes": [
+                {"id": 10, "type": "CheckpointLoaderSimple", "widgets": [{"name": "ckpt_name", "value": "missing.safetensors"}]},
+                {"id": 11, "type": "CheckpointLoaderSimple", "widgets": [{"name": "ckpt_name", "value": "missing.safetensors"}]},
+            ]
+        }
+        result = analyze(payload, lambda category: [])
+        self.assertEqual(result["summary"]["unresolved"], 1)
+        self.assertEqual(len(result["models"]), 1)
 
 
 if __name__ == "__main__":
