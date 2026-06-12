@@ -95,7 +95,7 @@ function ensurePanel() {
   panel = document.createElement("section");
   panel.id = "find-models-panel";
   panel.innerHTML = `
-    <div class="fm-header"><strong>ComfyUI Find Models</strong><button data-action="close">×</button></div>
+    <div class="fm-header"><strong>查找模型</strong><button data-action="close">×</button></div>
     <div class="fm-actions">
       <button data-action="scan">扫描当前工作流</button>
       <button data-action="adapt">一键加载模型</button>
@@ -132,7 +132,7 @@ function ensurePanel() {
           category: model.category,
         });
         const links = data.candidates.map((item) => sourceHtml(item, model)).join("");
-        target.innerHTML = links || "<span>未找到可下载模型</span>";
+        target.innerHTML = links || "<span>未找到文件名完全一致且可直接下载的模型</span>";
       } catch (error) {
         target.textContent = `查询失败：${error.message}`;
       } finally {
@@ -190,7 +190,7 @@ function render(result, quiet) {
       if (model && await applyMatch(model)) window.setTimeout(() => scan(false), 100);
     };
   });
-  if (!quiet || summary.unresolved) panel.classList.add("open");
+  if (!quiet) panel.classList.add("open");
 }
 
 async function scan(quiet = false) {
@@ -201,7 +201,7 @@ async function scan(quiet = false) {
     render(await post("/findmodels/scan", workflowSnapshot()), quiet);
   } catch (error) {
     updateToolbarButton(null, "扫描失败");
-    panel.classList.add("open");
+    if (!quiet) panel.classList.add("open");
     panel.querySelector(".fm-summary").textContent = `扫描失败：${error.message}`;
   }
 }
@@ -227,7 +227,27 @@ function findRunButton() {
   return selectors.map((selector) => document.querySelector(selector)).find(Boolean);
 }
 
+function findImageStreamButton() {
+  const selectors = [
+    "[data-testid='image-feed-button']",
+    "[data-testid='image-stream-button']",
+    "button[aria-label='显示图像流']",
+    "button[title='显示图像流']",
+    "button[aria-label*='图像流']",
+    "button[title*='图像流']",
+    "button[aria-label*='image feed']",
+    "button[title*='image feed']",
+  ];
+  const direct = selectors.map((selector) => document.querySelector(selector)).find(Boolean);
+  if (direct) return direct;
+  return [...document.querySelectorAll("button")].find((button) =>
+    ["显示图像流", "Show image feed", "Show image stream"].includes(button.textContent?.trim()),
+  );
+}
+
 function findTopToolbar() {
+  const imageStreamButton = findImageStreamButton();
+  if (imageStreamButton?.parentElement) return imageStreamButton.parentElement;
   const runButton = findRunButton();
   if (runButton?.parentElement) return runButton.parentElement;
   return document.querySelector(
@@ -237,6 +257,7 @@ function findTopToolbar() {
 
 function mountToolbarButton() {
   let existing = document.getElementById("find-models-launcher");
+  const imageStreamButton = findImageStreamButton();
   const runButton = findRunButton();
   const toolbar = findTopToolbar();
 
@@ -253,7 +274,11 @@ function mountToolbarButton() {
   if (toolbar) {
     existing.classList.remove("toolbar-fallback");
     if (existing.parentElement !== toolbar) {
-      runButton ? runButton.insertAdjacentElement("afterend", existing) : toolbar.appendChild(existing);
+      if (imageStreamButton) imageStreamButton.insertAdjacentElement("beforebegin", existing);
+      else if (runButton) runButton.insertAdjacentElement("afterend", existing);
+      else toolbar.appendChild(existing);
+    } else if (imageStreamButton && existing.nextElementSibling !== imageStreamButton) {
+      imageStreamButton.insertAdjacentElement("beforebegin", existing);
     }
     return true;
   }

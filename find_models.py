@@ -59,6 +59,10 @@ def _safe_query(name: str) -> str:
     return re.sub(r"[_\-.]+", " ", basename(name).rsplit(".", 1)[0]).strip()
 
 
+def _exact_model_name(wanted: str, candidate: str) -> bool:
+    return basename(wanted).lower() == basename(candidate).lower()
+
+
 def _is_https_url(value: Any) -> bool:
     return isinstance(value, str) and value.startswith("https://")
 
@@ -144,6 +148,27 @@ async def _remote_size(session: aiohttp.ClientSession, candidate: dict[str, Any]
             candidate["size"] = size if size and size >= 1024 else None
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
         pass
+
+
+async def _validate_web_candidate(session: aiohttp.ClientSession, candidate: dict[str, Any]) -> dict[str, Any] | None:
+    url = candidate.get("url")
+    if not _allowed_download_url(url):
+        return None
+    try:
+        async with session.head(
+            url,
+            allow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 ComfyUI_FindModels/1.5.0"},
+        ) as response:
+            if response.status != 200 or not _allowed_download_url(str(response.url)):
+                return None
+            content_type = response.headers.get("Content-Type", "").lower()
+            if "text/html" in content_type or "application/json" in content_type:
+                return None
+            await _remote_size(session, candidate)
+            return candidate
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+        return None
 
 
 async def _civitai_candidates(session: aiohttp.ClientSession, name: str) -> list[dict[str, Any]]:
@@ -295,9 +320,20 @@ async def find_sources(request: web.Request) -> web.Response:
     huggingface = results[1] if isinstance(results[1], list) else []
     quark_results = [result for result in results[2:] if isinstance(result, list)]
     quark = [candidate for result in quark_results for candidate in result]
-    candidates = sorted(civitai + huggingface + quark, key=lambda item: item["confidence"], reverse=True)[:16]
-    await asyncio.gather(*(_remote_size(session, candidate) for candidate in candidates), return_exceptions=True)
-    return web.json_response({"name": name, "candidates": candidates})
+    exact_web = [candidate for candidate in civitai + huggingface if _exact_model_name(name, candidate["name"])]
+    exact_quark = [candidate for candidate in quark if _exact_model_name(name, candidate["name"])]
+    checked_web = await asyncio.gather(
+        *(_validate_web_candidate(session, candidate) for candidate in exact_web),
+        return_exceptions=True,
+    )
+    checked_quark = await asyncio.gather(
+        *(_validate_quark_candidate(session, candidate) for candidate in exact_quark),
+        return_exceptions=True,
+    )
+    candidates = [
+        candidate for candidate in [*checked_web, *checked_quark] if isinstance(candidate, dict)
+    ]
+    return web.json_response({"name": name, "candidates": candidates[:12]})
 
 
 async def _quark_download_url(session: aiohttp.ClientSession, payload: dict[str, Any]) -> str:
@@ -327,6 +363,16 @@ async def _quark_download_url(session: aiohttp.ClientSession, payload: dict[str,
             return url
     detail = errors[0] if errors else "需要登录或文件超过公开下载大小限制"
     raise web.HTTPBadGateway(text=f"夸克无法公开下载：{detail}")
+
+
+async def _validate_quark_candidate(
+    session: aiohttp.ClientSession, candidate: dict[str, Any]
+) -> dict[str, Any] | None:
+    try:
+        await _quark_download_url(session, candidate["quark"])
+        return candidate
+    except web.HTTPException:
+        return None
 
 
 @PromptServer.instance.routes.post("/findmodels/download")

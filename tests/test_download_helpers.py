@@ -24,6 +24,7 @@ from ComfyUI_FindModels.find_models import (
     _allowed_download_url,
     _allowed_quark_download_url,
     _clear_filename_cache,
+    _exact_model_name,
     _is_model_payload,
     _safe_filename,
     _size_value,
@@ -53,6 +54,10 @@ class DownloadHelperTests(unittest.TestCase):
         self.assertEqual(_size_value(1024), 1024)
         self.assertEqual(_size_value(2048, 1024), 2097152)
         self.assertIsNone(_size_value(None))
+
+    def test_source_filename_must_match_missing_model_exactly(self):
+        self.assertTrue(_exact_model_name("folder/model.safetensors", "model.safetensors"))
+        self.assertFalse(_exact_model_name("model-v1.safetensors", "model-v2.safetensors"))
 
     def test_rejects_git_lfs_pointer_as_model(self):
         path = Path.cwd() / "test-lfs-pointer.safetensors"

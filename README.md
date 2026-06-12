@@ -33,6 +33,8 @@ git clone https://github.com/YOUR_NAME/ComfyUI_FindModels.git
 
 Restart ComfyUI. A persistent **查找模型** button appears beside the Queue/Run
 controls in the top toolbar. Hover over it to see the latest missing-model count.
+The button is placed immediately before **显示图像流** when that control is available.
+The panel stays closed during startup and workflow loading; open it from the toolbar.
 
 No extra Python packages are required.
 
@@ -50,6 +52,10 @@ No extra Python packages are required.
 The download results are search candidates. Verify the model page, license, base model,
 and filename before downloading. Some Civitai files require authentication, so their
 direct URL may redirect to a sign-in page.
+
+Only sources whose filename exactly matches the missing workflow filename and whose
+download endpoint is currently usable are shown. Similar filenames and restricted Quark
+files are excluded.
 
 Downloads are accepted only from approved Civitai and Hugging Face HTTPS hosts. Existing
 files are never overwritten. Completed downloads clear ComfyUI's model filename cache so
