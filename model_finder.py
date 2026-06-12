@@ -43,6 +43,24 @@ MODEL_WIDGET_HINTS = (
     "upscale",
     "embedding",
 )
+EXPLICIT_MODEL_WIDGETS = (
+    "ckpt_name",
+    "checkpoint_name",
+    "lora_name",
+    "vae_name",
+    "control_net_name",
+    "controlnet_name",
+    "clip_name",
+    "clip_vision",
+    "clip_vision_name",
+    "text_encoder_name",
+    "unet_name",
+    "diffusion_model",
+    "diffusion_model_name",
+    "upscale_model",
+    "upscale_model_name",
+    "embedding_name",
+)
 
 CATEGORY_HINTS = (
     ("upscale_models", ("rife", "frame_interpolation", "film", "upscale", "esrgan", "super_resolution", "superresolution")),
@@ -135,13 +153,23 @@ def normalized_stem(value: str) -> str:
 def extract_references(payload: Any) -> list[Reference]:
     found: dict[tuple[str, str, str | None, str | None], Reference] = {}
 
-    def add(value: str, hint: str, node_id: Any = None, widget: Any = None, node_type: Any = None) -> None:
+    def add(
+        value: str,
+        hint: str,
+        node_id: Any = None,
+        widget: Any = None,
+        node_type: Any = None,
+        model_selector: bool = False,
+    ) -> None:
         if not is_model_name(value):
             return
         widget_hint = re.sub(r"[^a-z0-9_]+", "", str(widget or "").lower())
         node_hint = re.sub(r"[^a-z0-9_]+", "", str(node_type or "").lower())
-        if node_id is not None and not any(term in f"{widget_hint} {node_hint}" for term in MODEL_WIDGET_HINTS):
-            return
+        if node_id is not None:
+            explicit_widget = widget_hint in EXPLICIT_MODEL_WIDGETS
+            loader_widget = "loader" in node_hint and any(term in widget_hint for term in MODEL_WIDGET_HINTS)
+            if not explicit_widget and not loader_widget and not model_selector:
+                return
         ref = Reference(
             name=normalize_path(value),
             category=classify(hint),
@@ -177,10 +205,13 @@ def extract_references(payload: Any) -> list[Reference]:
                             current_id,
                             widget_name,
                             current_type,
+                            bool(widget.get("model_selector")),
                         )
 
         for key, item in value.items():
             if key == "widgets":
+                continue
+            if node_id is None and key != "nodes":
                 continue
             walk(item, f"{hint} {current_type or ''} {key}", current_id, current_type)
 

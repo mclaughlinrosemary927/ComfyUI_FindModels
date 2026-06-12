@@ -24,9 +24,16 @@ function workflowSnapshot() {
     nodes: app.graph?._nodes?.map((node) => ({
       id: node.id,
       type: node.type,
-      widgets: (node.widgets || []).map((widget) => ({ name: widget.name, value: widget.value })),
+      widgets: (node.widgets || []).flatMap((widget) => {
+        const values = Array.isArray(widget.options?.values) ? widget.options.values : [];
+        const isModelSelector = values.some((value) =>
+          typeof value === "string" && /\.(bin|ckpt|gguf|onnx|pt|pth|safetensors)$/i.test(value),
+        );
+        const isAvailable = isModelSelector && values.some((value) => value === widget.value);
+        if (isAvailable) return [];
+        return [{ name: widget.name, value: widget.value, model_selector: isModelSelector }];
+      }),
     })) || [],
-    workflow: app.graph?.serialize?.() || {},
   };
 }
 
@@ -105,7 +112,7 @@ function ensurePanel() {
     <div class="fm-actions">
       <button data-action="scan">扫描当前工作流</button>
       <button data-action="adapt">一键加载模型</button>
-      <button data-action="organize">整理模型文件夹</button>
+      <button data-action="audit">检查模型位置</button>
     </div>
     <div class="fm-summary">尚未扫描</div><div class="fm-list"></div>`;
   document.body.appendChild(panel);
@@ -126,24 +133,22 @@ function ensurePanel() {
     button.disabled = false;
     if (count) window.setTimeout(() => scan(false), 100);
   };
-  panel.querySelector('[data-action="organize"]').onclick = async () => {
-    const button = panel.querySelector('[data-action="organize"]');
+  panel.querySelector('[data-action="audit"]').onclick = async () => {
+    const button = panel.querySelector('[data-action="audit"]');
     button.disabled = true;
     try {
-      const plan = await get("/findmodels/organize/plan");
-      if (!plan.count) {
-        panel.querySelector(".fm-summary").textContent = "模型文件夹已经符合官方目录结构。";
+      const audit = await get("/findmodels/audit");
+      if (!audit.count) {
+        panel.querySelector(".fm-summary").textContent = "未发现能够明确判断为放错位置的模型。";
         return;
       }
-      const preview = plan.moves.slice(0, 20).map((item) =>
-        `${item.category}: ${item.source.split(/[\\/]/).pop()}`,
+      const preview = audit.items.slice(0, 50).map((item) =>
+        `${item.expected}: ${item.path}`,
       ).join("\n");
-      if (!window.confirm(`将按 ComfyUI 官方目录整理 ${plan.count} 个模型文件。\n不会覆盖已有文件。\n\n${preview}\n\n确认移动？`)) return;
-      const result = await post("/findmodels/organize/apply", {});
-      panel.querySelector(".fm-summary").textContent = `已整理 ${result.moved} 个模型文件。请重启 ComfyUI。`;
-      window.setTimeout(() => scan(false), 300);
+      window.alert(`发现 ${audit.count} 个能够明确判断的位置问题。\n本功能只检查，不移动文件。\n\n${preview}`);
+      panel.querySelector(".fm-summary").textContent = `发现 ${audit.count} 个明确的位置问题，未移动任何文件。`;
     } catch (error) {
-      panel.querySelector(".fm-summary").textContent = `整理失败：${error.message}`;
+      panel.querySelector(".fm-summary").textContent = `检查失败：${error.message}`;
     } finally {
       button.disabled = false;
     }

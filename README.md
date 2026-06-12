@@ -6,13 +6,15 @@ candidate direct-download URLs from Civitai and Hugging Face.
 
 ## Features
 
-- Scans model widgets and serialized workflow data automatically after a workflow opens.
+- Scans explicit model-selector widgets on the live workflow after a workflow opens.
 - Recognizes checkpoints, LoRAs, VAEs, ControlNet, text encoders, diffusion models,
   embeddings, and upscale models.
 - Uses ComfyUI's configured model paths, including paths from `extra_model_paths.yaml`.
 - Distinguishes installed, adaptable, and missing model references.
 - Shows only unresolved models. Installed models and successfully loaded models disappear
   from the panel after the next scan.
+- Treats a current dropdown value as installed when ComfyUI still lists it, including
+  Chinese-named and other custom model selectors.
 - Applies only high-confidence local replacements with one click.
 - Finds candidate direct-download URLs without automatically downloading unverified files.
 - Adds **查找模型** to the ComfyUI top run bar, with a legacy run-bar fallback.
@@ -20,10 +22,12 @@ candidate direct-download URLs from Civitai and Hugging Face.
   ComfyUI model folder.
 - Shows candidate file sizes and loads successfully downloaded files into their workflow nodes.
 - Searches the configured Quark Netdisk libraries directly for missing model filenames.
-- Previews and organizes existing model files into official ComfyUI model directories
-  without overwriting files or moving anything outside the configured models root.
+- Audits existing model locations and reports only files whose expected official folder
+  can be determined clearly. The audit never moves files.
 - Leaves ambiguous checkpoint/diffusion model files in place instead of guessing their
   architecture from names such as `flux`, `wan`, or `z_image`.
+- Ignores serialized workflow metadata, URLs, free-text fields, and generic `model`
+  fields on non-loader custom nodes to prevent false missing-model reports.
 - Does not move, delete, or overwrite model files.
 
 ## Installation

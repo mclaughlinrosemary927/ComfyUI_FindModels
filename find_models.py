@@ -4,7 +4,6 @@ import asyncio
 import os
 import re
 import tempfile
-import shutil
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -170,9 +169,9 @@ def _classify_existing_file(path: Path) -> str | None:
     return None
 
 
-def _organize_plan() -> list[dict[str, str]]:
+def _audit_model_locations() -> list[dict[str, str]]:
     root = _comfy_model_root()
-    plan = []
+    issues = []
     for source in root.rglob("*"):
         if not source.is_file() or source.suffix.lower() not in MODEL_EXTENSIONS:
             continue
@@ -182,10 +181,8 @@ def _organize_plan() -> list[dict[str, str]]:
         target_dir = (root / OFFICIAL_MODEL_FOLDERS[category]).resolve()
         if source.parent == target_dir or target_dir in source.parents:
             continue
-        target = target_dir / source.name
-        if not target.exists():
-            plan.append({"category": category, "source": str(source), "target": str(target)})
-    return plan
+        issues.append({"expected": category, "path": str(source)})
+    return issues
 
 
 async def _get_json(session: aiohttp.ClientSession, url: str) -> Any:
@@ -400,28 +397,10 @@ async def find_sources(request: web.Request) -> web.Response:
     return web.json_response({"name": name, "candidates": candidates[:12], "quark_libraries": QUARK_MODEL_LIBRARIES})
 
 
-@PromptServer.instance.routes.get("/findmodels/organize/plan")
-async def organize_plan(request: web.Request) -> web.Response:
-    plan = _organize_plan()
-    return web.json_response({"count": len(plan), "moves": plan})
-
-
-@PromptServer.instance.routes.post("/findmodels/organize/apply")
-async def organize_apply(request: web.Request) -> web.Response:
-    root = _comfy_model_root()
-    moved = 0
-    for item in _organize_plan():
-        source = Path(item["source"]).resolve()
-        target = Path(item["target"]).resolve()
-        if root not in source.parents or root not in target.parents or target.exists():
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source), str(target))
-        moved += 1
-    cache = getattr(folder_paths, "filename_list_cache", None)
-    if isinstance(cache, dict):
-        cache.clear()
-    return web.json_response({"moved": moved})
+@PromptServer.instance.routes.get("/findmodels/audit")
+async def audit_models(request: web.Request) -> web.Response:
+    items = _audit_model_locations()
+    return web.json_response({"count": len(items), "items": items})
 
 
 async def _quark_download_url(session: aiohttp.ClientSession, payload: dict[str, Any]) -> str:

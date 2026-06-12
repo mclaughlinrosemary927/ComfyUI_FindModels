@@ -70,21 +70,27 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(result["summary"]["unresolved"], 0)
         self.assertEqual(result["models"], [])
 
-    def test_prefers_located_reference_over_serialized_duplicate(self):
+    def test_ignores_serialized_workflow_data(self):
         payload = {
-            "nodes": [{"id": 3, "type": "VAELoader", "widgets": [{"name": "vae_name", "value": "x.vae.safetensors"}]}],
-            "workflow": {"nodes": [{"type": "VAELoader", "widgets_values": ["x.vae.safetensors"]}]},
+            "nodes": [],
+            "workflow": {
+                "nodes": [
+                    {
+                        "type": "CheckpointLoaderSimple",
+                        "widgets_values": ["z_image_turbo_bf16.safetensors"],
+                    }
+                ]
+            },
         }
         refs = extract_references(payload)
-        self.assertEqual(len(refs), 1)
-        self.assertEqual(refs[0].node_id, "3")
+        self.assertEqual(refs, [])
 
-    def test_hides_external_custom_node_model_references(self):
+    def test_ignores_generic_custom_node_model_references(self):
         payload = {
             "nodes": [{"id": 8, "type": "CustomGGUFNode", "widgets": [{"name": "model", "value": "model.gguf"}]}]
         }
         result = analyze(payload, lambda category: [])
-        self.assertEqual(result["summary"]["external"], 1)
+        self.assertEqual(result["summary"]["external"], 0)
         self.assertEqual(result["models"], [])
 
     def test_shows_same_missing_file_only_once(self):
@@ -117,6 +123,29 @@ class ModelFinderTests(unittest.TestCase):
             "nodes": [{"id": 13, "type": "TextNode", "widgets": [{"name": "text", "value": "model.safetensors"}]}]
         }
         result = analyze(payload, lambda category: [])
+        self.assertEqual(result["models"], [])
+
+    def test_ignores_generic_model_widget_on_non_loader_custom_node(self):
+        payload = {
+            "nodes": [{"id": 14, "type": "Workflow-Encrypt ChatNode", "widgets": [{"name": "model", "value": "z_image_turbo_bf16.safetensors"}]}]
+        }
+        result = analyze(payload, lambda category: [])
+        self.assertEqual(result["models"], [])
+
+    def test_accepts_confirmed_custom_model_selector(self):
+        payload = {
+            "nodes": [{
+                "id": 15,
+                "type": "Dapao_LlamaChat",
+                "widgets": [{
+                    "name": "模型文件",
+                    "value": "Qwen3.5-9B-Uncensored.gguf",
+                    "model_selector": True,
+                }],
+            }]
+        }
+        result = analyze(payload, lambda category: [])
+        self.assertEqual(result["summary"]["external"], 1)
         self.assertEqual(result["models"], [])
 
 

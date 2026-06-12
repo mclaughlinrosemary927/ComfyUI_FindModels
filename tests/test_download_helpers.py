@@ -34,7 +34,7 @@ from ComfyUI_FindModels.find_models import (
     _size_value,
     _target_directory,
     _classify_existing_file,
-    _organize_plan,
+    _audit_model_locations,
 )
 
 
@@ -106,7 +106,7 @@ class DownloadHelperTests(unittest.TestCase):
         self.assertIsNone(_classify_existing_file(Path("checkpoints/z_image_turbo_bf16.safetensors")))
         self.assertIsNone(_classify_existing_file(Path("misc/unknown_model.safetensors")))
 
-    def test_organize_plan_moves_only_misplaced_files(self):
+    def test_audit_reports_only_clearly_misplaced_files(self):
         root = Path(folder_paths.models_dir)
         misplaced = root / "checkpoints" / "hero_lora.safetensors"
         correct = root / "loras" / "people" / "correct.safetensors"
@@ -115,9 +115,9 @@ class DownloadHelperTests(unittest.TestCase):
         misplaced.write_bytes(b"x")
         correct.write_bytes(b"x")
         try:
-            plan = _organize_plan()
-            self.assertTrue(any(item["source"] == str(misplaced.resolve()) for item in plan))
-            self.assertFalse(any(item["source"] == str(correct.resolve()) for item in plan))
+            issues = _audit_model_locations()
+            self.assertTrue(any(item["path"] == str(misplaced.resolve()) for item in issues))
+            self.assertFalse(any(item["path"] == str(correct.resolve()) for item in issues))
         finally:
             misplaced.unlink()
             correct.unlink()
