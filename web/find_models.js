@@ -11,6 +11,14 @@ function escapeHtml(value) {
   })[char]);
 }
 
+function formatSize(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size) || size <= 0) return "大小未知";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
+  return `${(size / (1024 ** index)).toFixed(index > 1 ? 2 : 0)} ${units[index]}`;
+}
+
 function workflowSnapshot() {
   return {
     nodes: app.graph?._nodes?.map((node) => ({
@@ -71,11 +79,13 @@ function sourceHtml(item, model) {
   const quark = item.quark ? escapeHtml(JSON.stringify(item.quark)) : "";
   return `<div class="fm-source">
     ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">` : "<span>"}
-      ${escapeHtml(item.provider)} · ${escapeHtml(item.name)} · ${Math.round(item.confidence * 100)}%
+      ${escapeHtml(item.provider)} · ${escapeHtml(item.name)} · ${formatSize(item.size)} · ${Math.round(item.confidence * 100)}%
     ${item.url ? "</a>" : "</span>"}
     <button data-download="${escapeHtml(item.url || "")}" data-quark-download="${quark}"
       data-filename="${escapeHtml(item.name)}"
-      data-category="${escapeHtml(model.category)}">下载到模型目录</button>
+      data-size="${escapeHtml(item.size || "")}"
+      data-category="${escapeHtml(model.category)}" data-node-id="${escapeHtml(model.node_id)}"
+      data-widget="${escapeHtml(model.widget)}" data-original="${escapeHtml(model.name)}">下载到模型目录</button>
   </div>`;
 }
 
@@ -137,14 +147,21 @@ function ensurePanel() {
     downloadButton.disabled = true;
     downloadButton.textContent = "正在下载…";
     try {
-      await post("/findmodels/download", {
+      const downloaded = await post("/findmodels/download", {
         url: downloadButton.dataset.download,
         quark: downloadButton.dataset.quarkDownload ? JSON.parse(downloadButton.dataset.quarkDownload) : null,
         filename: downloadButton.dataset.filename,
+        size: downloadButton.dataset.size || null,
         category: downloadButton.dataset.category,
       });
-      downloadButton.textContent = "下载完成";
-      window.setTimeout(() => scan(false), 300);
+      downloadButton.textContent = "下载完成，正在加载";
+      await applyMatch({
+        node_id: downloadButton.dataset.nodeId,
+        widget: downloadButton.dataset.widget,
+        name: downloadButton.dataset.original,
+        match: { name: downloaded.relative_name },
+      });
+      window.setTimeout(() => scan(false), 500);
     } catch (error) {
       downloadButton.disabled = false;
       downloadButton.textContent = "下载失败，重试";
@@ -158,9 +175,9 @@ function render(result, quiet) {
   const panel = ensurePanel();
   lastResult = result;
   const summary = result.summary;
-  updateToolbarButton(summary.missing);
+  updateToolbarButton(summary.unresolved);
   panel.querySelector(".fm-summary").textContent =
-    `引用 ${summary.references} · 已安装 ${summary.installed} · 可加载 ${summary.adaptable} · 缺失 ${summary.missing}`;
+    `仅显示未加载模型：${summary.unresolved}`;
   panel.querySelector(".fm-list").innerHTML = result.models.map((model) => `
     <article class="fm-item fm-${escapeHtml(model.status)}">
       <div><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.category)} · ${escapeHtml(model.status)}</span></div>
@@ -173,7 +190,7 @@ function render(result, quiet) {
       if (model && await applyMatch(model)) window.setTimeout(() => scan(false), 100);
     };
   });
-  if (!quiet || summary.missing || summary.adaptable) panel.classList.add("open");
+  if (!quiet || summary.unresolved) panel.classList.add("open");
 }
 
 async function scan(quiet = false) {

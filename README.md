@@ -11,12 +11,15 @@ candidate direct-download URLs from Civitai and Hugging Face.
   embeddings, and upscale models.
 - Uses ComfyUI's configured model paths, including paths from `extra_model_paths.yaml`.
 - Distinguishes installed, adaptable, and missing model references.
+- Shows only unresolved models. Installed models and successfully loaded models disappear
+  from the panel after the next scan.
 - Applies only high-confidence local replacements with one click.
 - Finds candidate direct-download URLs without automatically downloading unverified files.
-- Adds FindModels to the ComfyUI top run bar/menu, with a legacy run-bar fallback.
-- Downloads selected Civitai or Hugging Face candidates into the matching configured
+- Adds **查找模型** to the ComfyUI top run bar, with a legacy run-bar fallback.
+- Downloads selected Civitai, Hugging Face, or public Quark-share candidates into the matching configured
   ComfyUI model folder.
-- Provides a Quark Netdisk search link for missing model filenames.
+- Shows candidate file sizes and loads successfully downloaded files into their workflow nodes.
+- Searches the configured Quark Netdisk libraries directly for missing model filenames.
 - Does not move, delete, or overwrite model files.
 
 ## Installation

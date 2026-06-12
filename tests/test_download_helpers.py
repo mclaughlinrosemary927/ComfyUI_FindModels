@@ -24,7 +24,9 @@ from ComfyUI_FindModels.find_models import (
     _allowed_download_url,
     _allowed_quark_download_url,
     _clear_filename_cache,
+    _is_model_payload,
     _safe_filename,
+    _size_value,
     _target_directory,
 )
 
@@ -47,8 +49,29 @@ class DownloadHelperTests(unittest.TestCase):
     def test_sanitizes_filename(self):
         self.assertEqual(_safe_filename("../../model.safetensors"), "model.safetensors")
 
+    def test_normalizes_source_sizes(self):
+        self.assertEqual(_size_value(1024), 1024)
+        self.assertEqual(_size_value(2048, 1024), 2097152)
+        self.assertIsNone(_size_value(None))
+
+    def test_rejects_git_lfs_pointer_as_model(self):
+        path = Path.cwd() / "test-lfs-pointer.safetensors"
+        path.write_bytes(b"version https://git-lfs.github.com/spec/v1\n" + b"x" * 1024)
+        try:
+            self.assertFalse(_is_model_payload(path))
+        finally:
+            path.unlink()
+
     def test_uses_matching_comfyui_model_folder(self):
         self.assertEqual(_target_directory("loras"), (Path.cwd() / "models" / "loras").resolve())
+
+    def test_supports_legacy_comfyui_folder_aliases(self):
+        original = folder_paths.get_folder_paths
+        folder_paths.get_folder_paths = lambda category: [] if category == "text_encoders" else [str(Path.cwd() / "models" / category)]
+        try:
+            self.assertEqual(_target_directory("text_encoders"), (Path.cwd() / "models" / "clip").resolve())
+        finally:
+            folder_paths.get_folder_paths = original
 
     def test_clears_matching_model_cache_after_download(self):
         folder_paths.filename_list_cache = {"loras": ("cached",), "vae": ("keep",)}

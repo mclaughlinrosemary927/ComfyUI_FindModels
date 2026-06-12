@@ -211,12 +211,14 @@ def analyze(payload: Any, get_filename_list: Callable[[str], Iterable[str]]) -> 
     results = []
     for reference in references:
         results.append({**reference.as_dict(), **match_reference(reference, installed)})
+    unresolved = [item for item in results if item["status"] != "installed"]
     return {
         "summary": {
             "references": len(results),
             "installed": sum(item["status"] == "installed" for item in results),
             "adaptable": sum(item["status"] == "adaptable" for item in results),
             "missing": sum(item["status"] == "missing" for item in results),
+            "unresolved": len(unresolved),
         },
-        "models": results,
+        "models": unresolved,
     }

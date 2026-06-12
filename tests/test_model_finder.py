@@ -43,7 +43,9 @@ class ModelFinderTests(unittest.TestCase):
         result = analyze(payload, lambda category: FILES.get(category, []))
         self.assertEqual(result["summary"]["installed"], 1)
         self.assertEqual(result["summary"]["adaptable"], 1)
-        self.assertTrue(result["models"][1]["match"]["auto_apply"])
+        self.assertEqual(result["summary"]["unresolved"], 1)
+        self.assertEqual(len(result["models"]), 1)
+        self.assertTrue(result["models"][0]["match"]["auto_apply"])
 
     def test_exact_filename_in_subfolder_requires_loading_into_node(self):
         payload = {
@@ -55,6 +57,16 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(result["summary"]["adaptable"], 1)
         self.assertEqual(result["models"][0]["match"]["reason"], "exact_filename")
         self.assertTrue(result["models"][0]["match"]["auto_apply"])
+
+    def test_hides_installed_models(self):
+        payload = {
+            "nodes": [
+                {"id": 5, "type": "CheckpointLoaderSimple", "widgets": [{"name": "ckpt_name", "value": "sdxl/base/model-v1.safetensors"}]},
+            ]
+        }
+        result = analyze(payload, lambda category: FILES.get(category, []))
+        self.assertEqual(result["summary"]["unresolved"], 0)
+        self.assertEqual(result["models"], [])
 
     def test_prefers_located_reference_over_serialized_duplicate(self):
         payload = {

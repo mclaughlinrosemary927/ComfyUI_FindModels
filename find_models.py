@@ -18,8 +18,9 @@ from server import PromptServer
 from .model_finder import MODEL_EXTENSIONS, analyze, basename, normalized_stem
 
 
-TIMEOUT = aiohttp.ClientTimeout(total=12)
-DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=None, connect=30, sock_read=120)
+TIMEOUT = aiohttp.ClientTimeout(total=30)
+SOURCE_TIMEOUT = aiohttp.ClientTimeout(total=120, connect=20, sock_read=30)
+DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=None, connect=30, sock_read=600)
 ALLOWED_DOWNLOAD_HOSTS = {
     "civitai.com",
     "huggingface.co",
@@ -41,6 +42,16 @@ QUARK_CATEGORY_FOLDERS = {
     "diffusion_models": {"diffusion_models", "unet"},
     "upscale_models": {"upscale_models"},
     "embeddings": {"embeddings"},
+}
+DOWNLOAD_CATEGORY_ALIASES = {
+    "checkpoints": ("checkpoints",),
+    "loras": ("loras",),
+    "vae": ("vae",),
+    "controlnet": ("controlnet",),
+    "text_encoders": ("text_encoders", "clip"),
+    "diffusion_models": ("diffusion_models", "unet"),
+    "upscale_models": ("upscale_models",),
+    "embeddings": ("embeddings",),
 }
 
 
@@ -73,22 +84,40 @@ def _safe_filename(value: str) -> str:
     return name
 
 
-def _target_directory(category: str) -> Path:
+def _size_value(value: Any, multiplier: int = 1) -> int | None:
     try:
-        paths = folder_paths.get_folder_paths(category)
-    except Exception as error:
-        raise web.HTTPBadRequest(text=f"Unknown model category: {category}") from error
-    if not paths:
-        raise web.HTTPBadRequest(text=f"No configured folder for category: {category}")
-    target = Path(paths[0]).resolve()
-    target.mkdir(parents=True, exist_ok=True)
-    return target
+        size = int(float(value) * multiplier)
+        return size if size > 0 else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _is_model_payload(path: Path) -> bool:
+    if path.stat().st_size < 1024:
+        return False
+    with path.open("rb") as file:
+        prefix = file.read(256).lower()
+    return b"git-lfs.github.com/spec" not in prefix and not prefix.lstrip().startswith((b"<html", b"<!doctype", b"{\"error"))
+
+
+def _target_directory(category: str) -> Path:
+    for candidate in DOWNLOAD_CATEGORY_ALIASES.get(category, (category,)):
+        try:
+            paths = folder_paths.get_folder_paths(candidate)
+        except Exception:
+            continue
+        if paths:
+            target = Path(paths[0]).resolve()
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+    raise web.HTTPBadRequest(text=f"No configured model folder for category: {category}")
 
 
 def _clear_filename_cache(category: str) -> None:
     cache = getattr(folder_paths, "filename_list_cache", None)
     if isinstance(cache, dict):
-        cache.pop(category, None)
+        for candidate in DOWNLOAD_CATEGORY_ALIASES.get(category, (category,)):
+            cache.pop(candidate, None)
 
 
 async def _get_json(session: aiohttp.ClientSession, url: str) -> Any:
@@ -99,6 +128,22 @@ async def _get_json(session: aiohttp.ClientSession, url: str) -> Any:
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
         pass
     return None
+
+
+async def _remote_size(session: aiohttp.ClientSession, candidate: dict[str, Any]) -> None:
+    url = candidate.get("url")
+    if candidate.get("size") or not _allowed_download_url(url):
+        return
+    try:
+        async with session.head(url, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0 ComfyUI_FindModels/1.4.0"}) as response:
+            size = _size_value(
+                response.headers.get("X-Linked-Size")
+                or response.headers.get("X-File-Size")
+                or response.headers.get("Content-Length")
+            )
+            candidate["size"] = size if size and size >= 1024 else None
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+        pass
 
 
 async def _civitai_candidates(session: aiohttp.ClientSession, name: str) -> list[dict[str, Any]]:
@@ -117,6 +162,7 @@ async def _civitai_candidates(session: aiohttp.ClientSession, name: str) -> list
                             "model": model.get("name"),
                             "name": file_name,
                             "url": download_url,
+                            "size": _size_value(file.get("sizeKB"), 1024),
                             "confidence": round(
                                 SequenceMatcher(None, normalized_stem(name), normalized_stem(file_name)).ratio(),
                                 3,
@@ -146,6 +192,7 @@ async def _huggingface_candidates(session: aiohttp.ClientSession, name: str) -> 
                         "model": repo_id,
                         "name": basename(file_name),
                         "url": f"https://huggingface.co/{repo_id}/resolve/main/{quote(file_name)}",
+                        "size": _size_value(sibling.get("size") or (sibling.get("lfs") or {}).get("size")),
                         "confidence": round(confidence, 3),
                     }
                 )
@@ -159,9 +206,7 @@ async def _quark_json(
     url = f"{QUARK_API}{path}"
     try:
         async with session.request(method, url, json=data, headers=headers) as response:
-            payload = await response.json(content_type=None)
-            if response.status == 200 and payload.get("code") == 0:
-                return payload
+            return await response.json(content_type=None)
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
         pass
     return None
@@ -215,6 +260,7 @@ async def _quark_candidates(
                         "provider": library["name"],
                         "name": item_name,
                         "confidence": round(confidence, 3),
+                        "size": _size_value(item.get("size")),
                         "quark": {
                             "share_id": share_id,
                             "fid": item.get("fid"),
@@ -238,14 +284,19 @@ async def find_sources(request: web.Request) -> web.Response:
     category = str(payload.get("category", "unknown")).strip()
     if not name:
         raise web.HTTPBadRequest(text="Missing model name")
-    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        civitai, huggingface, *quark_results = await asyncio.gather(
+    async with aiohttp.ClientSession(timeout=SOURCE_TIMEOUT, trust_env=True) as session:
+        results = await asyncio.gather(
             _civitai_candidates(session, name),
             _huggingface_candidates(session, name),
             *(_quark_candidates(session, name, category, library) for library in QUARK_MODEL_LIBRARIES),
+            return_exceptions=True,
         )
+    civitai = results[0] if isinstance(results[0], list) else []
+    huggingface = results[1] if isinstance(results[1], list) else []
+    quark_results = [result for result in results[2:] if isinstance(result, list)]
     quark = [candidate for result in quark_results for candidate in result]
     candidates = sorted(civitai + huggingface + quark, key=lambda item: item["confidence"], reverse=True)[:16]
+    await asyncio.gather(*(_remote_size(session, candidate) for candidate in candidates), return_exceptions=True)
     return web.json_response({"name": name, "candidates": candidates})
 
 
@@ -259,23 +310,23 @@ async def _quark_download_url(session: aiohttp.ClientSession, payload: dict[str,
         data={"pwd_id": share_id, "passcode": ""},
     )
     stoken = ((token_data or {}).get("data") or {}).get("stoken")
-    download = await _quark_json(
-        session,
-        "POST",
-        "/file/download?pr=ucpro&fr=pc",
-        share_id=share_id,
-        data={
-            "fids": [payload.get("fid")],
-            "pwd_id": share_id,
-            "stoken": stoken,
-            "fids_token": [payload.get("fid_token")],
-        },
-    )
-    entries = (download or {}).get("data") or []
-    url = entries[0].get("download_url") if entries else None
-    if not _allowed_quark_download_url(url):
-        raise web.HTTPBadGateway(text="夸克未提供公开直链，文件可能需要登录或受到下载大小限制")
-    return url
+    request_data = {
+        "fids": [payload.get("fid")],
+        "pwd_id": share_id,
+        "stoken": stoken,
+        "fids_token": [payload.get("fid_token")],
+    }
+    errors = []
+    for endpoint in ("/file/download?pr=ucpro&fr=pc", "/file/share/download?pr=ucpro&fr=pc"):
+        download = await _quark_json(session, "POST", endpoint, share_id=share_id, data=request_data)
+        if download and download.get("message"):
+            errors.append(str(download["message"]))
+        entries = (download or {}).get("data") or []
+        url = entries[0].get("download_url") if entries else None
+        if _allowed_quark_download_url(url):
+            return url
+    detail = errors[0] if errors else "需要登录或文件超过公开下载大小限制"
+    raise web.HTTPBadGateway(text=f"夸克无法公开下载：{detail}")
 
 
 @PromptServer.instance.routes.post("/findmodels/download")
@@ -285,6 +336,7 @@ async def download_model(request: web.Request) -> web.Response:
     quark = payload.get("quark")
     category = str(payload.get("category", "")).strip()
     filename = _safe_filename(str(payload.get("filename", "")))
+    expected_size = _size_value(payload.get("size"))
     if not quark and not _allowed_download_url(url):
         raise web.HTTPBadRequest(text="Only approved HTTPS model providers are allowed")
 
@@ -300,17 +352,30 @@ async def download_model(request: web.Request) -> web.Response:
         fd, temp_name = tempfile.mkstemp(prefix=f".{filename}.", suffix=".part", dir=target_dir)
         os.close(fd)
         temp_path = Path(temp_name)
-        async with aiohttp.ClientSession(timeout=DOWNLOAD_TIMEOUT) as session:
+        async with aiohttp.ClientSession(timeout=DOWNLOAD_TIMEOUT, trust_env=True) as session:
             if isinstance(quark, dict):
                 url = await _quark_download_url(session, quark)
-            async with session.get(url, headers={"User-Agent": "ComfyUI_FindModels/1.1.0"}) as response:
+            async with session.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 ComfyUI_FindModels/1.4.0", "Referer": url},
+                allow_redirects=True,
+            ) as response:
                 allowed = _allowed_download_url(str(response.url)) or _allowed_quark_download_url(str(response.url))
                 if response.status != 200 or not allowed:
                     raise web.HTTPBadGateway(text=f"Download failed with HTTP {response.status}")
+                content_type = response.headers.get("Content-Type", "").lower()
+                if "text/html" in content_type or "application/json" in content_type:
+                    raise web.HTTPBadGateway(text="下载地址返回了网页或错误信息，而不是模型文件")
                 with temp_path.open("wb") as output:
                     async for chunk in response.content.iter_chunked(1024 * 1024):
                         output.write(chunk)
+        if not _is_model_payload(temp_path):
+            raise web.HTTPBadGateway(text="下载结果不是有效模型文件，可能是登录页面、错误信息或 Git LFS 指针")
         temp_path.replace(target)
+        tolerance = max(1024 * 1024, int(expected_size * 0.001)) if expected_size else 0
+        if expected_size and abs(target.stat().st_size - expected_size) > tolerance:
+            target.unlink()
+            raise web.HTTPBadGateway(text="下载文件大小与来源不一致，已删除不完整文件")
         _clear_filename_cache(category)
     except web.HTTPException:
         raise
@@ -321,5 +386,12 @@ async def download_model(request: web.Request) -> web.Response:
             temp_path.unlink()
 
     return web.json_response(
-        {"downloaded": True, "filename": filename, "category": category, "path": str(target)}
+        {
+            "downloaded": True,
+            "filename": filename,
+            "relative_name": filename,
+            "category": category,
+            "path": str(target),
+            "size": target.stat().st_size,
+        }
     )
