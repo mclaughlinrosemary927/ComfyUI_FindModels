@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path.cwd().parent))
 from ComfyUI_FindModels.find_models import (
     QUARK_MODEL_LIBRARIES,
     _allowed_download_url,
+    _allowed_quark_download_url,
     _clear_filename_cache,
     _safe_filename,
     _target_directory,
@@ -37,6 +38,11 @@ class DownloadHelperTests(unittest.TestCase):
     def test_rejects_unknown_or_insecure_hosts(self):
         self.assertFalse(_allowed_download_url("http://huggingface.co/model.safetensors"))
         self.assertFalse(_allowed_download_url("https://example.com/model.safetensors"))
+
+    def test_allows_only_official_quark_download_hosts(self):
+        self.assertTrue(_allowed_quark_download_url("https://download.uc.cn/model.safetensors"))
+        self.assertTrue(_allowed_quark_download_url("https://drive-pc.quark.cn/model.safetensors"))
+        self.assertFalse(_allowed_quark_download_url("https://example.com/model.safetensors"))
 
     def test_sanitizes_filename(self):
         self.assertEqual(_safe_filename("../../model.safetensors"), "model.safetensors")

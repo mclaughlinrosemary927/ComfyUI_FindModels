@@ -28,9 +28,20 @@ ALLOWED_DOWNLOAD_HOSTS = {
     "cdn-lfs-eu-1.hf.co",
 }
 QUARK_MODEL_LIBRARIES = (
-    {"name": "夸克模型库 1", "url": "https://pan.quark.cn/s/fb913d649b18"},
-    {"name": "夸克模型库 2", "url": "https://pan.quark.cn/s/4680ac8665162"},
+    {"name": "夸克模型库 1", "share_id": "fb913d649b18", "url": "https://pan.quark.cn/s/fb913d649b18"},
+    {"name": "夸克模型库 2", "share_id": "4680ac8665162", "url": "https://pan.quark.cn/s/4680ac8665162"},
 )
+QUARK_API = "https://drive-pc.quark.cn/1/clouddrive"
+QUARK_CATEGORY_FOLDERS = {
+    "checkpoints": {"checkpoints"},
+    "loras": {"loras", "lora"},
+    "vae": {"vae"},
+    "controlnet": {"controlnet"},
+    "text_encoders": {"text_encoders", "clip"},
+    "diffusion_models": {"diffusion_models", "unet"},
+    "upscale_models": {"upscale_models"},
+    "embeddings": {"embeddings"},
+}
 
 
 def _safe_query(name: str) -> str:
@@ -46,6 +57,13 @@ def _allowed_download_url(value: Any) -> bool:
         return False
     host = (urlparse(value).hostname or "").lower()
     return host in ALLOWED_DOWNLOAD_HOSTS or host.endswith(".civitai.com") or host.endswith(".hf.co")
+
+
+def _allowed_quark_download_url(value: Any) -> bool:
+    if not _is_https_url(value):
+        return False
+    host = (urlparse(value).hostname or "").lower()
+    return host.endswith((".quark.cn", ".uc.cn", ".alicdn.com", ".aliyuncs.com"))
 
 
 def _safe_filename(value: str) -> str:
@@ -134,6 +152,79 @@ async def _huggingface_candidates(session: aiohttp.ClientSession, name: str) -> 
     return candidates
 
 
+async def _quark_json(
+    session: aiohttp.ClientSession, method: str, path: str, *, share_id: str, data: Any = None
+) -> Any:
+    headers = {"User-Agent": "Mozilla/5.0 ComfyUI_FindModels/1.3.0", "Referer": f"https://pan.quark.cn/s/{share_id}"}
+    url = f"{QUARK_API}{path}"
+    try:
+        async with session.request(method, url, json=data, headers=headers) as response:
+            payload = await response.json(content_type=None)
+            if response.status == 200 and payload.get("code") == 0:
+                return payload
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+        pass
+    return None
+
+
+async def _quark_candidates(
+    session: aiohttp.ClientSession, name: str, category: str, library: dict[str, str]
+) -> list[dict[str, Any]]:
+    share_id = library["share_id"]
+    token_data = await _quark_json(
+        session,
+        "POST",
+        "/share/sharepage/token?pr=ucpro&fr=pc&uc_param_str=",
+        share_id=share_id,
+        data={"pwd_id": share_id, "passcode": ""},
+    )
+    stoken = ((token_data or {}).get("data") or {}).get("stoken")
+    if not stoken:
+        return []
+
+    queue = ["0"]
+    visited = set()
+    candidates = []
+    wanted = normalized_stem(name)
+    preferred_folders = QUARK_CATEGORY_FOLDERS.get(category, {category})
+    while queue and len(visited) < 80 and len(candidates) < 8:
+        directory = queue.pop(0)
+        if directory in visited:
+            continue
+        visited.add(directory)
+        query = (
+            f"/share/sharepage/detail?pr=ucpro&fr=pc&pwd_id={quote(share_id)}"
+            f"&stoken={quote(stoken, safe='')}&pdir_fid={quote(directory)}&force=0"
+            "&_page=1&_size=200&_sort=file_type:asc,file_name:asc"
+        )
+        detail = await _quark_json(session, "GET", query, share_id=share_id)
+        for item in ((detail or {}).get("data") or {}).get("list", []):
+            item_name = str(item.get("file_name", ""))
+            if item.get("dir"):
+                if item_name.lower() in preferred_folders:
+                    queue = [item["fid"]]
+                else:
+                    queue.append(item["fid"])
+                continue
+            if not item_name.lower().endswith(tuple(MODEL_EXTENSIONS)):
+                continue
+            confidence = SequenceMatcher(None, wanted, normalized_stem(item_name)).ratio()
+            if confidence >= 0.62:
+                candidates.append(
+                    {
+                        "provider": library["name"],
+                        "name": item_name,
+                        "confidence": round(confidence, 3),
+                        "quark": {
+                            "share_id": share_id,
+                            "fid": item.get("fid"),
+                            "fid_token": item.get("share_fid_token"),
+                        },
+                    }
+                )
+    return candidates
+
+
 @PromptServer.instance.routes.post("/findmodels/scan")
 async def scan_models(request: web.Request) -> web.Response:
     payload = await request.json()
@@ -144,33 +235,57 @@ async def scan_models(request: web.Request) -> web.Response:
 async def find_sources(request: web.Request) -> web.Response:
     payload = await request.json()
     name = str(payload.get("name", "")).strip()
+    category = str(payload.get("category", "unknown")).strip()
     if not name:
         raise web.HTTPBadRequest(text="Missing model name")
     async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        civitai, huggingface = await asyncio.gather(
+        civitai, huggingface, *quark_results = await asyncio.gather(
             _civitai_candidates(session, name),
             _huggingface_candidates(session, name),
+            *(_quark_candidates(session, name, category, library) for library in QUARK_MODEL_LIBRARIES),
         )
-    candidates = sorted(civitai + huggingface, key=lambda item: item["confidence"], reverse=True)[:12]
-    quark_search = " OR ".join(f'"{item["url"]}"' for item in QUARK_MODEL_LIBRARIES)
-    quark_search_url = f"https://www.google.com/search?q={quote(f'{name} ({quark_search})')}"
-    return web.json_response(
-        {
-            "name": name,
-            "candidates": candidates,
-            "quark_libraries": QUARK_MODEL_LIBRARIES,
-            "quark_search_url": quark_search_url,
-        }
+    quark = [candidate for result in quark_results for candidate in result]
+    candidates = sorted(civitai + huggingface + quark, key=lambda item: item["confidence"], reverse=True)[:16]
+    return web.json_response({"name": name, "candidates": candidates})
+
+
+async def _quark_download_url(session: aiohttp.ClientSession, payload: dict[str, Any]) -> str:
+    share_id = str(payload.get("share_id", ""))
+    token_data = await _quark_json(
+        session,
+        "POST",
+        "/share/sharepage/token?pr=ucpro&fr=pc&uc_param_str=",
+        share_id=share_id,
+        data={"pwd_id": share_id, "passcode": ""},
     )
+    stoken = ((token_data or {}).get("data") or {}).get("stoken")
+    download = await _quark_json(
+        session,
+        "POST",
+        "/file/download?pr=ucpro&fr=pc",
+        share_id=share_id,
+        data={
+            "fids": [payload.get("fid")],
+            "pwd_id": share_id,
+            "stoken": stoken,
+            "fids_token": [payload.get("fid_token")],
+        },
+    )
+    entries = (download or {}).get("data") or []
+    url = entries[0].get("download_url") if entries else None
+    if not _allowed_quark_download_url(url):
+        raise web.HTTPBadGateway(text="夸克未提供公开直链，文件可能需要登录或受到下载大小限制")
+    return url
 
 
 @PromptServer.instance.routes.post("/findmodels/download")
 async def download_model(request: web.Request) -> web.Response:
     payload = await request.json()
     url = str(payload.get("url", "")).strip()
+    quark = payload.get("quark")
     category = str(payload.get("category", "")).strip()
     filename = _safe_filename(str(payload.get("filename", "")))
-    if not _allowed_download_url(url):
+    if not quark and not _allowed_download_url(url):
         raise web.HTTPBadRequest(text="Only approved HTTPS model providers are allowed")
 
     target_dir = _target_directory(category)
@@ -186,8 +301,11 @@ async def download_model(request: web.Request) -> web.Response:
         os.close(fd)
         temp_path = Path(temp_name)
         async with aiohttp.ClientSession(timeout=DOWNLOAD_TIMEOUT) as session:
+            if isinstance(quark, dict):
+                url = await _quark_download_url(session, quark)
             async with session.get(url, headers={"User-Agent": "ComfyUI_FindModels/1.1.0"}) as response:
-                if response.status != 200 or not _allowed_download_url(str(response.url)):
+                allowed = _allowed_download_url(str(response.url)) or _allowed_quark_download_url(str(response.url))
+                if response.status != 200 or not allowed:
                     raise web.HTTPBadGateway(text=f"Download failed with HTTP {response.status}")
                 with temp_path.open("wb") as output:
                     async for chunk in response.content.iter_chunked(1024 * 1024):
