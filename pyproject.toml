@@ -1,0 +1,12 @@
+[project]
+name = "comfyui-findmodels"
+version = "1.0.0"
+description = "Find and adapt missing models in the current ComfyUI workflow"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+[tool.comfy]
+PublisherId = "comfyui-findmodels"
+DisplayName = "ComfyUI Find Models"
+Icon = ""

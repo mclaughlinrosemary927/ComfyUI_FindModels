@@ -1,0 +1,28 @@
+#find-models-launcher {
+  position: fixed; right: 18px; bottom: 18px; z-index: 1000;
+  padding: 9px 14px; border: 1px solid #666; border-radius: 8px;
+  color: #eee; background: #222; cursor: pointer;
+}
+#find-models-panel {
+  display: none; position: fixed; top: 60px; right: 18px; z-index: 1001;
+  width: min(520px, calc(100vw - 36px)); max-height: calc(100vh - 100px);
+  overflow: auto; box-sizing: border-box; padding: 14px;
+  color: #eee; background: #181818; border: 1px solid #555; border-radius: 10px;
+  box-shadow: 0 12px 40px #0009; font: 13px/1.45 sans-serif;
+}
+#find-models-panel.open { display: block; }
+.fm-header, .fm-actions, .fm-item > div:first-child { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.fm-header { margin-bottom: 12px; font-size: 16px; }
+.fm-header button { font-size: 20px; }
+.fm-actions { justify-content: flex-start; margin-bottom: 10px; }
+.fm-summary { padding: 8px 0; color: #bbb; }
+.fm-item { margin: 8px 0; padding: 10px; border-left: 4px solid #777; border-radius: 5px; background: #252525; }
+.fm-item strong { overflow-wrap: anywhere; }
+.fm-item span { color: #aaa; white-space: nowrap; }
+.fm-adaptable { border-color: #e6a700; }
+.fm-missing { border-color: #dc4c4c; }
+.fm-installed { border-color: #3ca66b; }
+.fm-match { margin: 7px 0; color: #ccc; overflow-wrap: anywhere; }
+.fm-sources { display: grid; gap: 5px; margin-top: 7px; }
+.fm-sources a { color: #7fb9ff; overflow-wrap: anywhere; }
+#find-models-panel button { padding: 5px 8px; color: #eee; background: #333; border: 1px solid #666; border-radius: 5px; cursor: pointer; }
