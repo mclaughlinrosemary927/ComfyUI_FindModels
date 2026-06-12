@@ -28,7 +28,8 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/YOUR_NAME/ComfyUI_FindModels.git
 ```
 
-Restart ComfyUI. **FindModels** appears in the top run bar/menu.
+Restart ComfyUI. A persistent **FindModels 未找到 N** button appears beside the
+Queue/Run controls in the top toolbar. `N` updates after each workflow scan.
 
 No extra Python packages are required.
 

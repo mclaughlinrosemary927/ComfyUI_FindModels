@@ -2,8 +2,8 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const EXTENSION = "ComfyUI.FindModels";
-const COMMAND_ID = "ComfyUI.FindModels.Open";
 let lastResult = null;
+let toolbarObserver = null;
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -153,6 +153,7 @@ function render(result, quiet) {
   const panel = ensurePanel();
   lastResult = result;
   const summary = result.summary;
+  updateToolbarButton(summary.missing);
   panel.querySelector(".fm-summary").textContent =
     `引用 ${summary.references} · 已安装 ${summary.installed} · 可加载 ${summary.adaptable} · 缺失 ${summary.missing}`;
   panel.querySelector(".fm-list").innerHTML = result.models.map((model) => `
@@ -172,45 +173,90 @@ function render(result, quiet) {
 
 async function scan(quiet = false) {
   const panel = ensurePanel();
+  updateToolbarButton(null, "扫描中");
   panel.querySelector(".fm-summary").textContent = "正在扫描…";
   try {
     render(await post("/findmodels/scan", workflowSnapshot()), quiet);
   } catch (error) {
+    updateToolbarButton(null, "扫描失败");
     panel.classList.add("open");
     panel.querySelector(".fm-summary").textContent = `扫描失败：${error.message}`;
   }
 }
 
-function addLegacyRunBarButton() {
-  if (document.getElementById("find-models-launcher")) return;
-  const runBar = document.querySelector(".comfy-menu, #comfy-menu, [data-testid='topbar']");
-  if (!runBar) return;
-  const button = document.createElement("button");
-  button.id = "find-models-launcher";
-  button.textContent = "FindModels";
-  button.title = "扫描当前工作流中的缺失模型";
-  button.onclick = () => scan(false);
-  runBar.appendChild(button);
+function updateToolbarButton(missing = null, state = null) {
+  const button = document.getElementById("find-models-launcher");
+  if (!button) return;
+  button.textContent = state ? `FindModels ${state}` : `FindModels 未找到 ${missing ?? 0}`;
+  button.dataset.missing = String(missing ?? 0);
+  button.classList.toggle("has-missing", Number(missing) > 0);
+}
+
+function findRunButton() {
+  const selectors = [
+    "[data-testid='queue-button']",
+    "[data-testid='run-button']",
+    "button[aria-label*='Queue']",
+    "button[aria-label*='Run']",
+    "button[title*='Queue']",
+    "button[title*='Run']",
+  ];
+  return selectors.map((selector) => document.querySelector(selector)).find(Boolean);
+}
+
+function findTopToolbar() {
+  const runButton = findRunButton();
+  if (runButton?.parentElement) return runButton.parentElement;
+  return document.querySelector(
+    "[data-testid='topbar'], header, .comfyui-body-top, .comfy-menu, #comfy-menu",
+  );
+}
+
+function mountToolbarButton() {
+  let existing = document.getElementById("find-models-launcher");
+  const runButton = findRunButton();
+  const toolbar = findTopToolbar();
+
+  if (!existing) {
+    existing = document.createElement("button");
+    existing.id = "find-models-launcher";
+    existing.type = "button";
+    existing.textContent = "FindModels 未找到 0";
+    existing.title = "扫描当前工作流中的缺失模型";
+    existing.onclick = () => scan(false);
+    document.body.appendChild(existing);
+  }
+
+  if (toolbar) {
+    existing.classList.remove("toolbar-fallback");
+    if (existing.parentElement !== toolbar) {
+      runButton ? runButton.insertAdjacentElement("afterend", existing) : toolbar.appendChild(existing);
+    }
+    return true;
+  }
+
+  existing.classList.add("toolbar-fallback");
+  if (existing.parentElement !== document.body) document.body.appendChild(existing);
+  return false;
+}
+
+function watchTopToolbar() {
+  mountToolbarButton();
+  toolbarObserver?.disconnect();
+  toolbarObserver = new MutationObserver(() => mountToolbarButton());
+  toolbarObserver.observe(document.body, { childList: true, subtree: true });
 }
 
 app.registerExtension({
   name: EXTENSION,
-  commands: [{
-    id: COMMAND_ID,
-    label: "FindModels",
-    function: () => scan(false),
-  }],
-  menuCommands: [{
-    path: ["FindModels"],
-    commands: [COMMAND_ID],
-  }],
   setup() {
     const style = document.createElement("link");
     style.rel = "stylesheet";
     style.href = new URL("./find_models.css", import.meta.url).href;
     document.head.appendChild(style);
     ensurePanel();
-    window.setTimeout(addLegacyRunBarButton, 500);
+    watchTopToolbar();
+    window.setTimeout(() => scan(true), 1200);
   },
   async afterConfigureGraph() {
     window.clearTimeout(window.__findModelsTimer);

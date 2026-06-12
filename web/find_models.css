@@ -1,6 +1,11 @@
 #find-models-launcher {
-  padding: 9px 14px; border: 1px solid #666; border-radius: 8px;
-  color: #eee; background: #222; cursor: pointer;
+  display: inline-flex; align-items: center; white-space: nowrap;
+  margin-inline: 4px; padding: 7px 10px; border: 1px solid #666; border-radius: 7px;
+  color: #eee; background: #292929; cursor: pointer;
+}
+#find-models-launcher.has-missing { border-color: #dc4c4c; color: #fff; background: #7d2929; }
+#find-models-launcher.toolbar-fallback {
+  position: fixed; top: 8px; right: 220px; z-index: 1000;
 }
 #find-models-panel {
   display: none; position: fixed; top: 60px; right: 18px; z-index: 1001;
