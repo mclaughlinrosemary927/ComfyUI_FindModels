@@ -24,6 +24,17 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(classify("RIFE VFI rife47.pth"), "upscale_models")
         self.assertEqual(classify("Load CLIP Vision clip_vision_h.safetensors"), "clip_vision")
 
+    def test_clip_vision_filename_classifies_translated_loader(self):
+        payload = {
+            "nodes": [{
+                "id": 17,
+                "type": "加载CLIP视觉",
+                "widgets": [{"name": "clip名称", "value": "clip_vision_h.safetensors", "model_selector": True}],
+            }]
+        }
+        result = analyze(payload, lambda category: ["clip_vision_h.safetensors"] if category == "clip_vision" else [])
+        self.assertEqual(result["models"], [])
+
     def test_normalized_stem_removes_common_precision_suffix(self):
         self.assertEqual(normalized_stem("Hero_v2_fp16.safetensors"), "hero")
 

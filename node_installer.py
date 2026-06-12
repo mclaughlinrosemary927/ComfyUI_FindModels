@@ -24,6 +24,7 @@ PROTECTED_DEPENDENCIES = {
     "onnxruntime",
     "onnxruntime-gpu",
 }
+FRONTEND_ONLY_NODE_HINTS = ("note", "markdown", "注释", "comment", "reroute")
 
 
 def missing_node_types(node_types: Iterable[Any], registered: Iterable[str]) -> list[str]:
@@ -32,7 +33,10 @@ def missing_node_types(node_types: Iterable[Any], registered: Iterable[str]) -> 
         {
             str(node_type).strip()
             for node_type in node_types
-            if isinstance(node_type, str) and node_type.strip() and node_type not in known
+            if isinstance(node_type, str)
+            and node_type.strip()
+            and node_type not in known
+            and not any(hint in node_type.lower() for hint in FRONTEND_ONLY_NODE_HINTS)
         },
         key=str.lower,
     )

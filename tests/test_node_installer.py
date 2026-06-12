@@ -32,6 +32,9 @@ class NodeInstallerTests(unittest.TestCase):
     def test_finds_only_unregistered_node_types(self):
         self.assertEqual(missing_node_types(["Known", "Missing", "Missing"], ["Known"]), ["Missing"])
 
+    def test_ignores_frontend_annotation_nodes(self):
+        self.assertEqual(missing_node_types(["Markdown注释", "注释+(mtb)", "Note"], []), [])
+
     def test_matches_te_market_preemption(self):
         result = market_candidates(MARKET, "UnetLoaderGGUF")
         self.assertEqual(result[0]["id"], "gguf")

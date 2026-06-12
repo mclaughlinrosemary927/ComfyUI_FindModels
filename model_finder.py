@@ -173,7 +173,7 @@ def extract_references(payload: Any) -> list[Reference]:
                 return
         ref = Reference(
             name=normalize_path(value),
-            category=classify(hint),
+            category=classify(f"{hint} {value}"),
             node_id=None if node_id is None else str(node_id),
             widget=None if widget is None else str(widget),
             node_type=None if node_type is None else str(node_type),

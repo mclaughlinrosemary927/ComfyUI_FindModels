@@ -94,22 +94,15 @@ function sourceHtml(item, model) {
   </div>`;
 }
 
-async function loadNodeCandidates(nodeType, target) {
-  target.textContent = "正在查询 TE 官方插件市场…";
-  try {
-    const data = await post("/findnodes/candidates", { node_type: nodeType });
-    const candidates = data.candidates.map((item) => `
+function nodeCandidatesHtml(nodeType, candidates) {
+    const links = candidates.map((item) => `
       <div class="fm-source">
         <a href="${escapeHtml(item.repo_url)}" target="_blank" rel="noopener noreferrer">
           ${escapeHtml(item.title)} · ${escapeHtml(item.author)} · ${Math.round(item.confidence * 100)}%
         </a>
         <button data-node-install="${escapeHtml(item.id)}" data-node-type="${escapeHtml(nodeType)}">安装或更新插件</button>
       </div>`).join("");
-    const fallback = `<a href="${escapeHtml(data.github_search_url)}" target="_blank" rel="noopener noreferrer">GitHub 搜索（未验证，不自动安装）</a>`;
-    target.innerHTML = candidates || `TE 官方市场没有精确匹配。${fallback}`;
-  } catch (error) {
-    target.textContent = `插件市场查询失败：${error.message}`;
-  }
+    return links || "TE 官方市场没有精确匹配。";
 }
 
 function ensurePanel() {
@@ -221,13 +214,14 @@ function render(result, quiet) {
   lastResult = result;
   const summary = result.summary;
   const missingNodes = result.missing_nodes || [];
+  const missingNodeCandidates = result.missing_node_candidates || {};
   updateToolbarButton(summary.unresolved + missingNodes.length);
   panel.querySelector(".fm-summary").textContent =
     `缺失节点：${missingNodes.length}；未加载模型：${summary.unresolved}`;
   const nodeHtml = missingNodes.map((nodeType) => `
     <article class="fm-item fm-missing">
       <div><strong>${escapeHtml(nodeType)}</strong><span>缺失节点</span></div>
-      <div class="fm-node-candidates" data-node-candidates="${escapeHtml(nodeType)}"></div>
+      <div class="fm-node-candidates">${nodeCandidatesHtml(nodeType, missingNodeCandidates[nodeType] || [])}</div>
     </article>`).join("");
   panel.querySelector(".fm-list").innerHTML = nodeHtml + result.models.map((model) => `
     <article class="fm-item fm-${escapeHtml(model.status)}">
@@ -235,9 +229,6 @@ function render(result, quiet) {
       ${model.match ? `<div class="fm-match">本地候选：${escapeHtml(model.match.name)} (${Math.round(model.match.confidence * 100)}%) ${model.match.auto_apply ? `<button data-apply="${escapeHtml(model.node_id)}:${escapeHtml(model.widget)}">加载</button>` : ""}</div>` : ""}
       ${model.status === "missing" ? `<button data-source="${escapeHtml(model.name)}">下载缺失模型</button><div class="fm-sources"></div>` : ""}
     </article>`).join("") || "<p>当前工作流中未发现缺失节点或模型。</p>";
-  panel.querySelectorAll("[data-node-candidates]").forEach((target) =>
-    loadNodeCandidates(target.dataset.nodeCandidates, target),
-  );
   panel.querySelectorAll("[data-apply]").forEach((button) => {
     button.onclick = async () => {
       const model = result.models.find((item) => `${item.node_id}:${item.widget}` === button.dataset.apply);

@@ -35,6 +35,7 @@ ALLOWED_DOWNLOAD_HOSTS = {
     "cdn-lfs.hf.co",
     "cdn-lfs-us-1.hf.co",
     "cdn-lfs-eu-1.hf.co",
+    "cas-bridge.xethub.hf.co",
 }
 QUARK_MODEL_LIBRARIES = (
     {"name": "夸克模型库 1", "share_id": "fb913d649b18", "url": "https://pan.quark.cn/s/fb913d649b18"},
@@ -90,7 +91,12 @@ def _allowed_download_url(value: Any) -> bool:
     if not _is_https_url(value):
         return False
     host = (urlparse(value).hostname or "").lower()
-    return host in ALLOWED_DOWNLOAD_HOSTS or host.endswith(".civitai.com") or host.endswith(".hf.co")
+    return (
+        host in ALLOWED_DOWNLOAD_HOSTS
+        or host.endswith(".civitai.com")
+        or host.endswith(".hf.co")
+        or host.endswith(".xethub.hf.co")
+    )
 
 
 def _allowed_quark_download_url(value: Any) -> bool:
@@ -332,6 +338,14 @@ async def scan_models(request: web.Request) -> web.Response:
         [node.get("type") for node in payload.get("nodes", []) if isinstance(node, dict)],
         registered,
     )
+    result["missing_node_candidates"] = {}
+    if result["missing_nodes"]:
+        async with aiohttp.ClientSession(timeout=SOURCE_TIMEOUT, trust_env=True) as session:
+            entries, node_map = await asyncio.gather(_te_market_entries(session), _official_node_map(session))
+        result["missing_node_candidates"] = {
+            node_type: market_candidates(entries, node_type, node_map)[:8]
+            for node_type in result["missing_nodes"]
+        }
     return web.json_response(result)
 
 
@@ -403,15 +417,14 @@ async def find_sources(request: web.Request) -> web.Response:
     quark = [candidate for result in quark_results for candidate in result]
     exact_web = [candidate for candidate in civitai + huggingface if _exact_model_name(name, candidate["name"])]
     known = KNOWN_MODEL_SOURCES.get(basename(name).lower())
-    if known:
-        exact_web.insert(0, dict(known))
+    verified_known = [dict(known)] if known else []
     exact_quark = [candidate for candidate in quark if _exact_model_name(name, candidate["name"])]
     checked_web = await asyncio.gather(
         *(_validate_web_candidate(session, candidate) for candidate in exact_web),
         return_exceptions=True,
     )
     candidates = [
-        candidate for candidate in [*checked_web, *exact_quark] if isinstance(candidate, dict)
+        candidate for candidate in [*verified_known, *checked_web, *exact_quark] if isinstance(candidate, dict)
     ]
     return web.json_response({"name": name, "candidates": candidates[:12]})
 
