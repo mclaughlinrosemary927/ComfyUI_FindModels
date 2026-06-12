@@ -36,7 +36,7 @@ class ModelFinderTests(unittest.TestCase):
     def test_analyze_exact_and_adaptable(self):
         payload = {
             "nodes": [
-                {"id": 1, "type": "CheckpointLoaderSimple", "widgets": [{"name": "ckpt_name", "value": "model-v1.safetensors"}]},
+                {"id": 1, "type": "CheckpointLoaderSimple", "widgets": [{"name": "ckpt_name", "value": "sdxl/base/model-v1.safetensors"}]},
                 {"id": 2, "type": "LoraLoader", "widgets": [{"name": "lora_name", "value": "HeroStyle.safetensors"}]},
             ]
         }
@@ -44,6 +44,17 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(result["summary"]["installed"], 1)
         self.assertEqual(result["summary"]["adaptable"], 1)
         self.assertTrue(result["models"][1]["match"]["auto_apply"])
+
+    def test_exact_filename_in_subfolder_requires_loading_into_node(self):
+        payload = {
+            "nodes": [
+                {"id": 4, "type": "CheckpointLoaderSimple", "widgets": [{"name": "ckpt_name", "value": "model-v1.safetensors"}]},
+            ]
+        }
+        result = analyze(payload, lambda category: FILES.get(category, []))
+        self.assertEqual(result["summary"]["adaptable"], 1)
+        self.assertEqual(result["models"][0]["match"]["reason"], "exact_filename")
+        self.assertTrue(result["models"][0]["match"]["auto_apply"])
 
     def test_prefers_located_reference_over_serialized_duplicate(self):
         payload = {

@@ -31,15 +31,39 @@ async function post(path, body) {
   return response.json();
 }
 
-function applyMatch(model) {
-  const node = app.graph?.getNodeById?.(Number(model.node_id)) || app.graph?.getNodeById?.(model.node_id);
-  const widget = node?.widgets?.find((item) => item.name === model.widget);
-  if (!widget || !model.match?.name) return false;
-  widget.value = model.match.name;
-  widget.callback?.(widget.value, app.canvas, node, [0, 0], {});
-  node.setDirtyCanvas?.(true, true);
-  app.graph?.setDirtyCanvas?.(true, true);
-  return true;
+function findTargetWidget(node, model) {
+  const widgets = node?.widgets || [];
+  return widgets.find((item) => item.name === model.widget)
+    || widgets.find((item) => item.value === model.name)
+    || widgets.find((item) => typeof item.value === "string" && item.value.replaceAll("\\", "/") === model.name);
+}
+
+async function applyMatch(model) {
+  const numericId = Number(model.node_id);
+  const node = app.graph?.getNodeById?.(Number.isNaN(numericId) ? model.node_id : numericId)
+    || app.graph?._nodes?.find((item) => String(item.id) === String(model.node_id));
+  const widget = findTargetWidget(node, model);
+  if (!node || !widget || !model.match?.name) return false;
+
+  const previous = widget.value;
+  try {
+    node.graph?.beforeChange?.(node);
+    widget.value = model.match.name;
+    if (typeof widget.callback === "function") {
+      await Promise.resolve(widget.callback(widget.value, app.canvas, node, [0, 0], {}));
+    }
+    node.onWidgetChanged?.(widget.name, widget.value, previous, widget);
+    node.graph?.afterChange?.(node);
+    node.setDirtyCanvas?.(true, true);
+    app.graph?.setDirtyCanvas?.(true, true);
+    app.canvas?.setDirty?.(true, true);
+    return widget.value === model.match.name;
+  } catch (error) {
+    widget.value = previous;
+    node.graph?.afterChange?.(node);
+    console.error("[ComfyUI_FindModels] Failed to load model", model, error);
+    return false;
+  }
 }
 
 function ensurePanel() {
@@ -51,19 +75,26 @@ function ensurePanel() {
     <div class="fm-header"><strong>ComfyUI Find Models</strong><button data-action="close">×</button></div>
     <div class="fm-actions">
       <button data-action="scan">扫描当前工作流</button>
-      <button data-action="adapt">应用高置信替代</button>
+      <button data-action="adapt">一键加载模型</button>
     </div>
     <div class="fm-summary">尚未扫描</div><div class="fm-list"></div>`;
   document.body.appendChild(panel);
   panel.querySelector('[data-action="close"]').onclick = () => panel.classList.remove("open");
   panel.querySelector('[data-action="scan"]').onclick = () => scan(false);
-  panel.querySelector('[data-action="adapt"]').onclick = () => {
+  panel.querySelector('[data-action="adapt"]').onclick = async () => {
+    const button = panel.querySelector('[data-action="adapt"]');
+    button.disabled = true;
     let count = 0;
+    let failed = 0;
     for (const model of lastResult?.models || []) {
-      if (model.match?.auto_apply && applyMatch(model)) count += 1;
+      if (!model.match?.auto_apply) continue;
+      if (await applyMatch(model)) count += 1;
+      else failed += 1;
     }
-    panel.querySelector(".fm-summary").textContent = `已应用 ${count} 个高置信替代，请检查后保存工作流。`;
-    if (count) scan(false);
+    panel.querySelector(".fm-summary").textContent =
+      `已加载 ${count} 个模型${failed ? `，${failed} 个加载失败` : ""}。请检查节点后保存工作流。`;
+    button.disabled = false;
+    if (count) window.setTimeout(() => scan(false), 100);
   };
   panel.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-source]");
@@ -99,9 +130,9 @@ function render(result, quiet) {
       ${model.status === "missing" ? `<button data-source="${escapeHtml(model.name)}">查找下载直链</button><div class="fm-sources"></div>` : ""}
     </article>`).join("") || "<p>当前工作流中未识别到模型引用。</p>";
   panel.querySelectorAll("[data-apply]").forEach((button) => {
-    button.onclick = () => {
+    button.onclick = async () => {
       const model = result.models.find((item) => `${item.node_id}:${item.widget}` === button.dataset.apply);
-      if (model && applyMatch(model)) scan(false);
+      if (model && await applyMatch(model)) window.setTimeout(() => scan(false), 100);
     };
   });
   if (!quiet || summary.missing || summary.adaptable) panel.classList.add("open");

@@ -192,7 +192,7 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
         return {"status": "missing", "match": None}
 
     score, name, category, reason = best
-    status = "installed" if score >= 0.96 else "adaptable" if score >= 0.78 else "missing"
+    status = "installed" if reason == "exact_path" else "adaptable" if score >= 0.78 else "missing"
     return {
         "status": status,
         "match": {
@@ -200,7 +200,7 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
             "category": category,
             "confidence": round(score, 3),
             "reason": reason,
-            "auto_apply": status == "adaptable" and score >= 0.86,
+            "auto_apply": status == "adaptable" and score >= 0.86 and reference.node_id is not None,
         },
     }
 
