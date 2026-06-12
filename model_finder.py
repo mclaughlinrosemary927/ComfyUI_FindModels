@@ -29,6 +29,20 @@ STANDARD_LOADER_HINTS = (
     "upscale",
     "embedding",
 )
+MODEL_WIDGET_HINTS = (
+    "ckpt",
+    "checkpoint",
+    "model",
+    "lora",
+    "vae",
+    "control",
+    "clip",
+    "encoder",
+    "unet",
+    "diffusion",
+    "upscale",
+    "embedding",
+)
 
 CATEGORY_HINTS = (
     ("upscale_models", ("rife", "frame_interpolation", "film", "upscale", "esrgan", "super_resolution", "superresolution")),
@@ -97,6 +111,8 @@ def basename(value: str) -> str:
 
 
 def is_model_name(value: str) -> bool:
+    if "://" in value or value.startswith(("http:", "https:")):
+        return False
     clean = normalize_path(value).split("?", 1)[0].split("#", 1)[0]
     return PurePosixPath(clean).suffix.lower() in MODEL_EXTENSIONS
 
@@ -121,6 +137,10 @@ def extract_references(payload: Any) -> list[Reference]:
 
     def add(value: str, hint: str, node_id: Any = None, widget: Any = None, node_type: Any = None) -> None:
         if not is_model_name(value):
+            return
+        widget_hint = re.sub(r"[^a-z0-9_]+", "", str(widget or "").lower())
+        node_hint = re.sub(r"[^a-z0-9_]+", "", str(node_type or "").lower())
+        if node_id is not None and not any(term in f"{widget_hint} {node_hint}" for term in MODEL_WIDGET_HINTS):
             return
         ref = Reference(
             name=normalize_path(value),

@@ -103,6 +103,8 @@ class DownloadHelperTests(unittest.TestCase):
         self.assertEqual(_classify_existing_file(Path("misc/loras/hero.safetensors")), "loras")
         self.assertEqual(_classify_existing_file(Path("misc/rife47.pth")), "upscale_models")
         self.assertEqual(_classify_existing_file(Path("misc/vae_model.safetensors")), "vae")
+        self.assertIsNone(_classify_existing_file(Path("checkpoints/z_image_turbo_bf16.safetensors")))
+        self.assertIsNone(_classify_existing_file(Path("misc/unknown_model.safetensors")))
 
     def test_organize_plan_moves_only_misplaced_files(self):
         root = Path(folder_paths.models_dir)

@@ -165,10 +165,8 @@ def _classify_existing_file(path: Path) -> str | None:
         return "upscale_models"
     if "/vae" in text or name.startswith("vae") or "_vae" in name:
         return "vae"
-    if any(term in text for term in ("diffusion_model", "/unet/", "flux", "wan")):
+    if any(term in text for term in ("diffusion_model", "/unet/")):
         return "diffusion_models"
-    if path.suffix.lower() in MODEL_EXTENSIONS:
-        return "checkpoints"
     return None
 
 

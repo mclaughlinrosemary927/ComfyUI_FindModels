@@ -22,6 +22,8 @@ candidate direct-download URLs from Civitai and Hugging Face.
 - Searches the configured Quark Netdisk libraries directly for missing model filenames.
 - Previews and organizes existing model files into official ComfyUI model directories
   without overwriting files or moving anything outside the configured models root.
+- Leaves ambiguous checkpoint/diffusion model files in place instead of guessing their
+  architecture from names such as `flux`, `wan`, or `z_image`.
 - Does not move, delete, or overwrite model files.
 
 ## Installation

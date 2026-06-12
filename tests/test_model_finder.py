@@ -98,6 +98,27 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(result["summary"]["unresolved"], 1)
         self.assertEqual(len(result["models"]), 1)
 
+    def test_ignores_model_urls_in_text_widgets(self):
+        payload = {
+            "nodes": [{
+                "id": 12,
+                "type": "TextNode",
+                "widgets": [{
+                    "name": "text",
+                    "value": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/model.safetensors",
+                }],
+            }]
+        }
+        result = analyze(payload, lambda category: [])
+        self.assertEqual(result["models"], [])
+
+    def test_ignores_filename_in_non_model_text_widget(self):
+        payload = {
+            "nodes": [{"id": 13, "type": "TextNode", "widgets": [{"name": "text", "value": "model.safetensors"}]}]
+        }
+        result = analyze(payload, lambda category: [])
+        self.assertEqual(result["models"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
