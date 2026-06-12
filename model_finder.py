@@ -121,7 +121,7 @@ class Reference:
 
 
 def normalize_path(value: str) -> str:
-    return value.replace("\\", "/").strip()
+    return value.replace("\\", "/").strip().lstrip("/")
 
 
 def basename(value: str) -> str:

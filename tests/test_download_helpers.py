@@ -33,8 +33,6 @@ from ComfyUI_FindModels.find_models import (
     _safe_filename,
     _size_value,
     _target_directory,
-    _classify_existing_file,
-    _audit_model_locations,
 )
 
 
@@ -76,6 +74,10 @@ class DownloadHelperTests(unittest.TestCase):
     def test_uses_matching_comfyui_model_folder(self):
         self.assertEqual(_target_directory("loras"), (Path.cwd() / "models" / "loras").resolve())
 
+    def test_rejects_unknown_download_folder(self):
+        with self.assertRaises(Exception):
+            _target_directory("unknown")
+
     def test_supports_legacy_comfyui_folder_aliases(self):
         original = folder_paths.get_folder_paths
         folder_paths.get_folder_paths = lambda category: [] if category == "text_encoders" else [str(Path.cwd() / "models" / category)]
@@ -98,30 +100,6 @@ class DownloadHelperTests(unittest.TestCase):
                 "https://pan.quark.cn/s/4680ac8665162",
             ],
         )
-
-    def test_classifies_files_for_official_folders(self):
-        self.assertEqual(_classify_existing_file(Path("misc/loras/hero.safetensors")), "loras")
-        self.assertEqual(_classify_existing_file(Path("misc/rife47.pth")), "upscale_models")
-        self.assertEqual(_classify_existing_file(Path("misc/vae_model.safetensors")), "vae")
-        self.assertIsNone(_classify_existing_file(Path("checkpoints/z_image_turbo_bf16.safetensors")))
-        self.assertIsNone(_classify_existing_file(Path("misc/unknown_model.safetensors")))
-
-    def test_audit_reports_only_clearly_misplaced_files(self):
-        root = Path(folder_paths.models_dir)
-        misplaced = root / "checkpoints" / "hero_lora.safetensors"
-        correct = root / "loras" / "people" / "correct.safetensors"
-        misplaced.parent.mkdir(parents=True, exist_ok=True)
-        correct.parent.mkdir(parents=True, exist_ok=True)
-        misplaced.write_bytes(b"x")
-        correct.write_bytes(b"x")
-        try:
-            issues = _audit_model_locations()
-            self.assertTrue(any(item["path"] == str(misplaced.resolve()) for item in issues))
-            self.assertFalse(any(item["path"] == str(correct.resolve()) for item in issues))
-        finally:
-            misplaced.unlink()
-            correct.unlink()
-
 
 if __name__ == "__main__":
     unittest.main()

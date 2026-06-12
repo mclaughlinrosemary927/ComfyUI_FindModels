@@ -22,10 +22,6 @@ candidate direct-download URLs from Civitai and Hugging Face.
   ComfyUI model folder.
 - Shows candidate file sizes and loads successfully downloaded files into their workflow nodes.
 - Searches the configured Quark Netdisk libraries directly for missing model filenames.
-- Audits existing model locations and reports only files whose expected official folder
-  can be determined clearly. The audit never moves files.
-- Leaves ambiguous checkpoint/diffusion model files in place instead of guessing their
-  architecture from names such as `flux`, `wan`, or `z_image`.
 - Ignores serialized workflow metadata, URLs, free-text fields, and generic `model`
   fields on non-loader custom nodes to prevent false missing-model reports.
 - Does not move, delete, or overwrite model files.
@@ -53,7 +49,7 @@ No extra Python packages are required.
 3. Review local replacement suggestions.
 4. Click **一键加载模型** to load safe high-confidence local matches into their nodes, or apply an
    individual suggestion.
-5. For missing models, click **查找下载来源**. You can download a Civitai or Hugging
+5. For missing models, click **下载缺失模型**. You can download a Civitai or Hugging
    Face candidate or a public match from the two configured Quark Netdisk model libraries
    directly into its matching configured model folder.
 
@@ -61,9 +57,10 @@ The download results are search candidates. Verify the model page, license, base
 and filename before downloading. Some Civitai files require authentication, so their
 direct URL may redirect to a sign-in page.
 
-Only sources whose filename exactly matches the missing workflow filename and whose
-download endpoint is currently usable are shown. Similar filenames and restricted Quark
-files are excluded.
+Only sources whose filename exactly matches the missing workflow filename are shown.
+Matching Quark files are shown as download buttons instead of fallback search links.
+The download endpoint rejects unknown model categories rather than placing files in an
+incorrect folder.
 
 Downloads are accepted only from approved Civitai and Hugging Face HTTPS hosts. Existing
 files are never overwritten. Completed downloads clear ComfyUI's model filename cache so
@@ -91,7 +88,7 @@ python -m unittest discover -s tests -v
 ## Privacy
 
 Workflow model filenames are sent to Civitai, Hugging Face, and the two configured public
-Quark shares only when you explicitly click **查找下载来源**. Regular scans remain local.
+Quark shares only when you explicitly click **下载缺失模型**. Regular scans remain local.
 
 ## License
 

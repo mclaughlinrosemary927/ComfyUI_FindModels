@@ -55,19 +55,6 @@ DOWNLOAD_CATEGORY_ALIASES = {
     "upscale_models": ("upscale_models",),
     "embeddings": ("embeddings",),
 }
-OFFICIAL_MODEL_FOLDERS = {
-    "checkpoints": "checkpoints",
-    "loras": "loras",
-    "vae": "vae",
-    "controlnet": "controlnet",
-    "clip_vision": "clip_vision",
-    "text_encoders": "text_encoders",
-    "diffusion_models": "diffusion_models",
-    "upscale_models": "upscale_models",
-    "embeddings": "embeddings",
-}
-
-
 def _safe_query(name: str) -> str:
     return re.sub(r"[_\-.]+", " ", basename(name).rsplit(".", 1)[0]).strip()
 
@@ -118,7 +105,10 @@ def _is_model_payload(path: Path) -> bool:
 
 
 def _target_directory(category: str) -> Path:
-    for candidate in DOWNLOAD_CATEGORY_ALIASES.get(category, (category,)):
+    aliases = DOWNLOAD_CATEGORY_ALIASES.get(category)
+    if not aliases:
+        raise web.HTTPBadRequest(text=f"无法确定模型对应的 ComfyUI 文件夹: {category}")
+    for candidate in aliases:
         try:
             paths = folder_paths.get_folder_paths(candidate)
         except Exception:
@@ -135,54 +125,6 @@ def _clear_filename_cache(category: str) -> None:
     if isinstance(cache, dict):
         for candidate in DOWNLOAD_CATEGORY_ALIASES.get(category, (category,)):
             cache.pop(candidate, None)
-
-
-def _comfy_model_root() -> Path:
-    base = getattr(folder_paths, "models_dir", None)
-    if not base:
-        checkpoint_paths = folder_paths.get_folder_paths("checkpoints")
-        if not checkpoint_paths:
-            raise web.HTTPBadRequest(text="无法确定 ComfyUI models 目录")
-        base = Path(checkpoint_paths[0]).parent
-    return Path(base).resolve()
-
-
-def _classify_existing_file(path: Path) -> str | None:
-    text = path.as_posix().lower()
-    name = path.name.lower()
-    if any(term in text for term in ("lora", "lycoris")):
-        return "loras"
-    if "controlnet" in text or "control_net" in text:
-        return "controlnet"
-    if "clip_vision" in text:
-        return "clip_vision"
-    if any(term in text for term in ("text_encoder", "/clip/", "/t5")):
-        return "text_encoders"
-    if "embedding" in text:
-        return "embeddings"
-    if any(term in text for term in ("upscale", "esrgan", "rife", "frame_interpolation")):
-        return "upscale_models"
-    if "/vae" in text or name.startswith("vae") or "_vae" in name:
-        return "vae"
-    if any(term in text for term in ("diffusion_model", "/unet/")):
-        return "diffusion_models"
-    return None
-
-
-def _audit_model_locations() -> list[dict[str, str]]:
-    root = _comfy_model_root()
-    issues = []
-    for source in root.rglob("*"):
-        if not source.is_file() or source.suffix.lower() not in MODEL_EXTENSIONS:
-            continue
-        category = _classify_existing_file(source)
-        if not category:
-            continue
-        target_dir = (root / OFFICIAL_MODEL_FOLDERS[category]).resolve()
-        if source.parent == target_dir or target_dir in source.parents:
-            continue
-        issues.append({"expected": category, "path": str(source)})
-    return issues
 
 
 async def _get_json(session: aiohttp.ClientSession, url: str) -> Any:
@@ -387,20 +329,10 @@ async def find_sources(request: web.Request) -> web.Response:
         *(_validate_web_candidate(session, candidate) for candidate in exact_web),
         return_exceptions=True,
     )
-    checked_quark = await asyncio.gather(
-        *(_validate_quark_candidate(session, candidate) for candidate in exact_quark),
-        return_exceptions=True,
-    )
     candidates = [
-        candidate for candidate in [*checked_web, *checked_quark] if isinstance(candidate, dict)
+        candidate for candidate in [*checked_web, *exact_quark] if isinstance(candidate, dict)
     ]
-    return web.json_response({"name": name, "candidates": candidates[:12], "quark_libraries": QUARK_MODEL_LIBRARIES})
-
-
-@PromptServer.instance.routes.get("/findmodels/audit")
-async def audit_models(request: web.Request) -> web.Response:
-    items = _audit_model_locations()
-    return web.json_response({"count": len(items), "items": items})
+    return web.json_response({"name": name, "candidates": candidates[:12]})
 
 
 async def _quark_download_url(session: aiohttp.ClientSession, payload: dict[str, Any]) -> str:
@@ -429,17 +361,7 @@ async def _quark_download_url(session: aiohttp.ClientSession, payload: dict[str,
         if _allowed_quark_download_url(url):
             return url
     detail = errors[0] if errors else "需要登录或文件超过公开下载大小限制"
-    raise web.HTTPBadGateway(text=f"夸克无法公开下载：{detail}")
-
-
-async def _validate_quark_candidate(
-    session: aiohttp.ClientSession, candidate: dict[str, Any]
-) -> dict[str, Any] | None:
-    try:
-        await _quark_download_url(session, candidate["quark"])
-        return candidate
-    except web.HTTPException:
-        return None
+    raise web.HTTPBadGateway(text=f"夸克拒绝直链下载：{detail}")
 
 
 @PromptServer.instance.routes.post("/findmodels/download")

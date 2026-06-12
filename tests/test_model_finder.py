@@ -27,6 +27,12 @@ class ModelFinderTests(unittest.TestCase):
     def test_normalized_stem_removes_common_precision_suffix(self):
         self.assertEqual(normalized_stem("Hero_v2_fp16.safetensors"), "hero")
 
+    def test_removes_leading_path_separators(self):
+        refs = extract_references(
+            {"nodes": [{"id": 6, "type": "VAELoader", "widgets": [{"name": "vae_name", "value": "\\/folder/model.safetensors"}]}]}
+        )
+        self.assertEqual(refs[0].name, "folder/model.safetensors")
+
     def test_extracts_widget_reference_with_location(self):
         refs = extract_references(
             {"nodes": [{"id": 7, "type": "LoraLoader", "widgets": [{"name": "lora_name", "value": "Hero.safetensors"}]}]}

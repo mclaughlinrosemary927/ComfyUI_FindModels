@@ -47,12 +47,6 @@ async function post(path, body) {
   return response.json();
 }
 
-async function get(path) {
-  const response = await api.fetchApi(path);
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
-}
-
 function findTargetWidget(node, model) {
   const widgets = node?.widgets || [];
   return widgets.find((item) => item.name === model.widget)
@@ -112,7 +106,6 @@ function ensurePanel() {
     <div class="fm-actions">
       <button data-action="scan">扫描当前工作流</button>
       <button data-action="adapt">一键加载模型</button>
-      <button data-action="audit">检查模型位置</button>
     </div>
     <div class="fm-summary">尚未扫描</div><div class="fm-list"></div>`;
   document.body.appendChild(panel);
@@ -133,31 +126,11 @@ function ensurePanel() {
     button.disabled = false;
     if (count) window.setTimeout(() => scan(false), 100);
   };
-  panel.querySelector('[data-action="audit"]').onclick = async () => {
-    const button = panel.querySelector('[data-action="audit"]');
-    button.disabled = true;
-    try {
-      const audit = await get("/findmodels/audit");
-      if (!audit.count) {
-        panel.querySelector(".fm-summary").textContent = "未发现能够明确判断为放错位置的模型。";
-        return;
-      }
-      const preview = audit.items.slice(0, 50).map((item) =>
-        `${item.expected}: ${item.path}`,
-      ).join("\n");
-      window.alert(`发现 ${audit.count} 个能够明确判断的位置问题。\n本功能只检查，不移动文件。\n\n${preview}`);
-      panel.querySelector(".fm-summary").textContent = `发现 ${audit.count} 个明确的位置问题，未移动任何文件。`;
-    } catch (error) {
-      panel.querySelector(".fm-summary").textContent = `检查失败：${error.message}`;
-    } finally {
-      button.disabled = false;
-    }
-  };
   panel.addEventListener("click", async (event) => {
     const sourceButton = event.target.closest("[data-source]");
     if (sourceButton) {
       sourceButton.disabled = true;
-      sourceButton.textContent = "查询中…";
+      sourceButton.textContent = "正在获取下载项…";
       const model = lastResult?.models?.find((item) => item.name === sourceButton.dataset.source);
       const target = sourceButton.closest(".fm-item").querySelector(".fm-sources");
       try {
@@ -166,15 +139,12 @@ function ensurePanel() {
           category: model.category,
         });
         const links = data.candidates.map((item) => sourceHtml(item, model)).join("");
-        const quarkFallback = data.quark_libraries.map((item) =>
-          `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.name)}备用查找</a>`,
-        ).join("");
-        target.innerHTML = `${links || "<span>未找到文件名完全一致且可直接下载的模型</span>"}${quarkFallback}`;
+        target.innerHTML = links || "<span>未找到文件名完全一致的可下载模型</span>";
       } catch (error) {
-        target.textContent = `查询失败：${error.message}`;
+        target.textContent = `获取下载项失败：${error.message}`;
       } finally {
         sourceButton.disabled = false;
-        sourceButton.textContent = "查找下载来源";
+        sourceButton.textContent = "下载缺失模型";
       }
       return;
     }
@@ -219,7 +189,7 @@ function render(result, quiet) {
     <article class="fm-item fm-${escapeHtml(model.status)}">
       <div><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.category)} · ${escapeHtml(model.status)}</span></div>
       ${model.match ? `<div class="fm-match">本地候选：${escapeHtml(model.match.name)} (${Math.round(model.match.confidence * 100)}%) ${model.match.auto_apply ? `<button data-apply="${escapeHtml(model.node_id)}:${escapeHtml(model.widget)}">加载</button>` : ""}</div>` : ""}
-      ${model.status === "missing" ? `<button data-source="${escapeHtml(model.name)}">查找下载来源</button><div class="fm-sources"></div>` : ""}
+      ${model.status === "missing" ? `<button data-source="${escapeHtml(model.name)}">下载缺失模型</button><div class="fm-sources"></div>` : ""}
     </article>`).join("") || "<p>当前工作流中未识别到模型引用。</p>";
   panel.querySelectorAll("[data-apply]").forEach((button) => {
     button.onclick = async () => {
