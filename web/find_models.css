@@ -1,5 +1,4 @@
 #find-models-launcher {
-  position: fixed; right: 18px; bottom: 18px; z-index: 1000;
   padding: 9px 14px; border: 1px solid #666; border-radius: 8px;
   color: #eee; background: #222; cursor: pointer;
 }
@@ -24,5 +23,6 @@
 .fm-installed { border-color: #3ca66b; }
 .fm-match { margin: 7px 0; color: #ccc; overflow-wrap: anywhere; }
 .fm-sources { display: grid; gap: 5px; margin-top: 7px; }
+.fm-source { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; }
 .fm-sources a { color: #7fb9ff; overflow-wrap: anywhere; }
 #find-models-panel button { padding: 5px 8px; color: #eee; background: #333; border: 1px solid #666; border-radius: 5px; cursor: pointer; }

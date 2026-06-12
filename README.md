@@ -13,6 +13,10 @@ candidate direct-download URLs from Civitai and Hugging Face.
 - Distinguishes installed, adaptable, and missing model references.
 - Applies only high-confidence local replacements with one click.
 - Finds candidate direct-download URLs without automatically downloading unverified files.
+- Adds FindModels to the ComfyUI top run bar/menu, with a legacy run-bar fallback.
+- Downloads selected Civitai or Hugging Face candidates into the matching configured
+  ComfyUI model folder.
+- Provides a Quark Netdisk search link for missing model filenames.
 - Does not move, delete, or overwrite model files.
 
 ## Installation
@@ -24,23 +28,28 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/YOUR_NAME/ComfyUI_FindModels.git
 ```
 
-Restart ComfyUI. A **Find Models** button appears in the lower-right corner.
+Restart ComfyUI. **FindModels** appears in the top run bar/menu.
 
 No extra Python packages are required.
 
 ## Usage
 
 1. Open or drag a workflow into ComfyUI.
-2. The extension scans automatically. You can also click **Find Models**.
+2. The extension scans automatically. You can also click **FindModels** in the top bar.
 3. Review local replacement suggestions.
 4. Click **一键加载模型** to load safe high-confidence local matches into their nodes, or apply an
    individual suggestion.
-5. For missing models, click **查找下载直链** and review the provider, filename,
-   and confidence before downloading.
+5. For missing models, click **查找下载来源**. You can download a Civitai or Hugging
+   Face candidate into its matching configured model folder, or open the Quark Netdisk
+   search link.
 
 The download results are search candidates. Verify the model page, license, base model,
 and filename before downloading. Some Civitai files require authentication, so their
 direct URL may redirect to a sign-in page.
+
+Downloads are accepted only from approved Civitai and Hugging Face HTTPS hosts. Existing
+files are never overwritten. Quark Netdisk does not provide a stable public global-search
+API, so the extension opens a scoped web search rather than requesting account cookies.
 
 ## Matching Rules
 

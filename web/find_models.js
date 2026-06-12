@@ -2,6 +2,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const EXTENSION = "ComfyUI.FindModels";
+const COMMAND_ID = "ComfyUI.FindModels.Open";
 let lastResult = null;
 
 function escapeHtml(value) {
@@ -66,6 +67,16 @@ async function applyMatch(model) {
   }
 }
 
+function sourceHtml(item, model) {
+  return `<div class="fm-source">
+    <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">
+      ${escapeHtml(item.provider)} · ${escapeHtml(item.name)} · ${Math.round(item.confidence * 100)}%
+    </a>
+    <button data-download="${escapeHtml(item.url)}" data-filename="${escapeHtml(item.name)}"
+      data-category="${escapeHtml(model.category)}">下载到模型目录</button>
+  </div>`;
+}
+
 function ensurePanel() {
   let panel = document.getElementById("find-models-panel");
   if (panel) return panel;
@@ -97,21 +108,42 @@ function ensurePanel() {
     if (count) window.setTimeout(() => scan(false), 100);
   };
   panel.addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-source]");
-    if (!button) return;
-    button.disabled = true;
-    button.textContent = "查询中…";
+    const sourceButton = event.target.closest("[data-source]");
+    if (sourceButton) {
+      sourceButton.disabled = true;
+      sourceButton.textContent = "查询中…";
+      const model = lastResult?.models?.find((item) => item.name === sourceButton.dataset.source);
+      const target = sourceButton.closest(".fm-item").querySelector(".fm-sources");
+      try {
+        const data = await post("/findmodels/sources", { name: sourceButton.dataset.source });
+        const links = data.candidates.map((item) => sourceHtml(item, model)).join("");
+        target.innerHTML = `${links || "<span>未找到可靠直链候选</span>"}
+          <a href="${escapeHtml(data.quark_url)}" target="_blank" rel="noopener noreferrer">在夸克网盘中查找</a>`;
+      } catch (error) {
+        target.textContent = `查询失败：${error.message}`;
+      } finally {
+        sourceButton.disabled = false;
+        sourceButton.textContent = "查找下载来源";
+      }
+      return;
+    }
+
+    const downloadButton = event.target.closest("[data-download]");
+    if (!downloadButton) return;
+    downloadButton.disabled = true;
+    downloadButton.textContent = "正在下载…";
     try {
-      const data = await post("/findmodels/sources", { name: button.dataset.source });
-      const target = button.closest(".fm-item").querySelector(".fm-sources");
-      target.innerHTML = data.candidates.length
-        ? data.candidates.map((item) => `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.provider)} · ${escapeHtml(item.name)} · ${Math.round(item.confidence * 100)}%</a>`).join("")
-        : "<span>未找到可靠下载候选</span>";
+      await post("/findmodels/download", {
+        url: downloadButton.dataset.download,
+        filename: downloadButton.dataset.filename,
+        category: downloadButton.dataset.category,
+      });
+      downloadButton.textContent = "下载完成";
+      window.setTimeout(() => scan(false), 300);
     } catch (error) {
-      button.closest(".fm-item").querySelector(".fm-sources").textContent = `查询失败：${error.message}`;
-    } finally {
-      button.disabled = false;
-      button.textContent = "查找下载直链";
+      downloadButton.disabled = false;
+      downloadButton.textContent = "下载失败，重试";
+      panel.querySelector(".fm-summary").textContent = `下载失败：${error.message}`;
     }
   });
   return panel;
@@ -122,12 +154,12 @@ function render(result, quiet) {
   lastResult = result;
   const summary = result.summary;
   panel.querySelector(".fm-summary").textContent =
-    `引用 ${summary.references} · 已安装 ${summary.installed} · 可适配 ${summary.adaptable} · 缺失 ${summary.missing}`;
+    `引用 ${summary.references} · 已安装 ${summary.installed} · 可加载 ${summary.adaptable} · 缺失 ${summary.missing}`;
   panel.querySelector(".fm-list").innerHTML = result.models.map((model) => `
     <article class="fm-item fm-${escapeHtml(model.status)}">
       <div><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.category)} · ${escapeHtml(model.status)}</span></div>
-      ${model.match ? `<div class="fm-match">本地候选：${escapeHtml(model.match.name)} (${Math.round(model.match.confidence * 100)}%) ${model.match.auto_apply ? `<button data-apply="${escapeHtml(model.node_id)}:${escapeHtml(model.widget)}">应用</button>` : ""}</div>` : ""}
-      ${model.status === "missing" ? `<button data-source="${escapeHtml(model.name)}">查找下载直链</button><div class="fm-sources"></div>` : ""}
+      ${model.match ? `<div class="fm-match">本地候选：${escapeHtml(model.match.name)} (${Math.round(model.match.confidence * 100)}%) ${model.match.auto_apply ? `<button data-apply="${escapeHtml(model.node_id)}:${escapeHtml(model.widget)}">加载</button>` : ""}</div>` : ""}
+      ${model.status === "missing" ? `<button data-source="${escapeHtml(model.name)}">查找下载来源</button><div class="fm-sources"></div>` : ""}
     </article>`).join("") || "<p>当前工作流中未识别到模型引用。</p>";
   panel.querySelectorAll("[data-apply]").forEach((button) => {
     button.onclick = async () => {
@@ -149,20 +181,36 @@ async function scan(quiet = false) {
   }
 }
 
+function addLegacyRunBarButton() {
+  if (document.getElementById("find-models-launcher")) return;
+  const runBar = document.querySelector(".comfy-menu, #comfy-menu, [data-testid='topbar']");
+  if (!runBar) return;
+  const button = document.createElement("button");
+  button.id = "find-models-launcher";
+  button.textContent = "FindModels";
+  button.title = "扫描当前工作流中的缺失模型";
+  button.onclick = () => scan(false);
+  runBar.appendChild(button);
+}
+
 app.registerExtension({
   name: EXTENSION,
+  commands: [{
+    id: COMMAND_ID,
+    label: "FindModels",
+    function: () => scan(false),
+  }],
+  menuCommands: [{
+    path: ["FindModels"],
+    commands: [COMMAND_ID],
+  }],
   setup() {
     const style = document.createElement("link");
     style.rel = "stylesheet";
     style.href = new URL("./find_models.css", import.meta.url).href;
     document.head.appendChild(style);
-    const button = document.createElement("button");
-    button.id = "find-models-launcher";
-    button.textContent = "Find Models";
-    button.title = "扫描当前工作流中的缺失模型";
-    button.onclick = () => scan(false);
-    document.body.appendChild(button);
     ensurePanel();
+    window.setTimeout(addLegacyRunBarButton, 500);
   },
   async afterConfigureGraph() {
     window.clearTimeout(window.__findModelsTimer);
