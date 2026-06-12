@@ -29,8 +29,6 @@ function workflowSnapshot() {
         const isModelSelector = values.some((value) =>
           typeof value === "string" && /\.(bin|ckpt|gguf|onnx|pt|pth|safetensors)$/i.test(value),
         );
-        const isAvailable = isModelSelector && values.some((value) => value === widget.value);
-        if (isAvailable) return [];
         return [{ name: widget.name, value: widget.value, model_selector: isModelSelector }];
       }),
     })) || [],
@@ -96,6 +94,24 @@ function sourceHtml(item, model) {
   </div>`;
 }
 
+async function loadNodeCandidates(nodeType, target) {
+  target.textContent = "正在查询 TE 官方插件市场…";
+  try {
+    const data = await post("/findnodes/candidates", { node_type: nodeType });
+    const candidates = data.candidates.map((item) => `
+      <div class="fm-source">
+        <a href="${escapeHtml(item.repo_url)}" target="_blank" rel="noopener noreferrer">
+          ${escapeHtml(item.title)} · ${escapeHtml(item.author)} · ${Math.round(item.confidence * 100)}%
+        </a>
+        <button data-node-install="${escapeHtml(item.id)}" data-node-type="${escapeHtml(nodeType)}">安装或更新插件</button>
+      </div>`).join("");
+    const fallback = `<a href="${escapeHtml(data.github_search_url)}" target="_blank" rel="noopener noreferrer">GitHub 搜索（未验证，不自动安装）</a>`;
+    target.innerHTML = candidates || `TE 官方市场没有精确匹配。${fallback}`;
+  } catch (error) {
+    target.textContent = `插件市场查询失败：${error.message}`;
+  }
+}
+
 function ensurePanel() {
   let panel = document.getElementById("find-models-panel");
   if (panel) return panel;
@@ -127,6 +143,28 @@ function ensurePanel() {
     if (count) window.setTimeout(() => scan(false), 100);
   };
   panel.addEventListener("click", async (event) => {
+    const installButton = event.target.closest("[data-node-install]");
+    if (installButton) {
+      installButton.disabled = true;
+      installButton.textContent = "正在检查依赖并安装…";
+      try {
+        const result = await post("/findnodes/install", {
+          node_type: installButton.dataset.nodeType,
+          plugin_id: installButton.dataset.nodeInstall,
+        });
+        installButton.textContent = result.action === "updated" ? "更新完成，需重启" : "安装完成，需重启";
+        panel.querySelector(".fm-summary").textContent =
+          `${result.title} 已${result.action === "updated" ? "更新" : "安装"}；`
+          + `${result.new_conflicts?.length ? `发现 ${result.new_conflicts.length} 个新增依赖冲突，请查看终端。` : "未发现新增依赖冲突。"}`
+          + "请重启 ComfyUI。";
+      } catch (error) {
+        installButton.disabled = false;
+        installButton.textContent = "安装失败，重试";
+        panel.querySelector(".fm-summary").textContent = `插件安装已停止：${error.message}`;
+      }
+      return;
+    }
+
     const sourceButton = event.target.closest("[data-source]");
     if (sourceButton) {
       sourceButton.disabled = true;
@@ -182,15 +220,24 @@ function render(result, quiet) {
   const panel = ensurePanel();
   lastResult = result;
   const summary = result.summary;
-  updateToolbarButton(summary.unresolved);
+  const missingNodes = result.missing_nodes || [];
+  updateToolbarButton(summary.unresolved + missingNodes.length);
   panel.querySelector(".fm-summary").textContent =
-    `仅显示未加载模型：${summary.unresolved}`;
-  panel.querySelector(".fm-list").innerHTML = result.models.map((model) => `
+    `缺失节点：${missingNodes.length}；未加载模型：${summary.unresolved}`;
+  const nodeHtml = missingNodes.map((nodeType) => `
+    <article class="fm-item fm-missing">
+      <div><strong>${escapeHtml(nodeType)}</strong><span>缺失节点</span></div>
+      <div class="fm-node-candidates" data-node-candidates="${escapeHtml(nodeType)}"></div>
+    </article>`).join("");
+  panel.querySelector(".fm-list").innerHTML = nodeHtml + result.models.map((model) => `
     <article class="fm-item fm-${escapeHtml(model.status)}">
       <div><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.category)} · ${escapeHtml(model.status)}</span></div>
       ${model.match ? `<div class="fm-match">本地候选：${escapeHtml(model.match.name)} (${Math.round(model.match.confidence * 100)}%) ${model.match.auto_apply ? `<button data-apply="${escapeHtml(model.node_id)}:${escapeHtml(model.widget)}">加载</button>` : ""}</div>` : ""}
       ${model.status === "missing" ? `<button data-source="${escapeHtml(model.name)}">下载缺失模型</button><div class="fm-sources"></div>` : ""}
-    </article>`).join("") || "<p>当前工作流中未识别到模型引用。</p>";
+    </article>`).join("") || "<p>当前工作流中未发现缺失节点或模型。</p>";
+  panel.querySelectorAll("[data-node-candidates]").forEach((target) =>
+    loadNodeCandidates(target.dataset.nodeCandidates, target),
+  );
   panel.querySelectorAll("[data-apply]").forEach((button) => {
     button.onclick = async () => {
       const model = result.models.find((item) => `${item.node_id}:${item.widget}` === button.dataset.apply);

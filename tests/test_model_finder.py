@@ -151,8 +151,23 @@ class ModelFinderTests(unittest.TestCase):
             }]
         }
         result = analyze(payload, lambda category: [])
-        self.assertEqual(result["summary"]["external"], 1)
-        self.assertEqual(result["models"], [])
+        self.assertEqual(result["summary"]["missing"], 1)
+        self.assertEqual(result["models"][0]["name"], "Qwen3.5-9B-Uncensored.gguf")
+
+    def test_fantasytalking_model_uses_diffusion_models_folder(self):
+        payload = {
+            "nodes": [{
+                "id": 16,
+                "type": "FantasyTalkingModelLoader",
+                "widgets": [{
+                    "name": "model",
+                    "value": "万相JK/fantasytalking_fp16.safetensors",
+                    "model_selector": True,
+                }],
+            }]
+        }
+        result = analyze(payload, lambda category: [])
+        self.assertEqual(result["models"][0]["category"], "diffusion_models")
 
 
 if __name__ == "__main__":

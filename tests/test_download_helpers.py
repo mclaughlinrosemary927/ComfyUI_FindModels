@@ -24,6 +24,7 @@ sys.modules.setdefault("folder_paths", folder_paths)
 sys.path.insert(0, str(Path.cwd().parent))
 
 from ComfyUI_FindModels.find_models import (
+    KNOWN_MODEL_SOURCES,
     QUARK_MODEL_LIBRARIES,
     _allowed_download_url,
     _allowed_quark_download_url,
@@ -100,6 +101,11 @@ class DownloadHelperTests(unittest.TestCase):
                 "https://pan.quark.cn/s/4680ac8665162",
             ],
         )
+
+    def test_contains_verified_fantasytalking_source(self):
+        source = KNOWN_MODEL_SOURCES["fantasytalking_fp16.safetensors"]
+        self.assertEqual(source["name"], "fantasytalking_fp16.safetensors")
+        self.assertTrue(source["url"].startswith("https://huggingface.co/Kijai/WanVideo_comfy/"))
 
 if __name__ == "__main__":
     unittest.main()

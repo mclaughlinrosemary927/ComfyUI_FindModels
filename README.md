@@ -13,8 +13,8 @@ candidate direct-download URLs from Civitai and Hugging Face.
 - Distinguishes installed, adaptable, and missing model references.
 - Shows only unresolved models. Installed models and successfully loaded models disappear
   from the panel after the next scan.
-- Treats a current dropdown value as installed when ComfyUI still lists it, including
-  Chinese-named and other custom model selectors.
+- Verifies Chinese-named and other custom model-selector values against files registered
+  on disk instead of assuming a stale dropdown value is installed.
 - Applies only high-confidence local replacements with one click.
 - Finds candidate direct-download URLs without automatically downloading unverified files.
 - Adds **查找模型** to the ComfyUI top run bar, with a legacy run-bar fallback.
@@ -24,6 +24,11 @@ candidate direct-download URLs from Civitai and Hugging Face.
 - Searches the configured Quark Netdisk libraries directly for missing model filenames.
 - Ignores serialized workflow metadata, URLs, free-text fields, and generic `model`
   fields on non-loader custom nodes to prevent false missing-model reports.
+- Detects node types missing from ComfyUI's live node registry and matches them against
+  the local TE launcher's official plugin market plus ComfyUI-Manager's official node map.
+- Installs or updates only exact, verified TE-market matches. Before installation it checks
+  duplicate repositories, performs a dependency dry run, blocks core runtime dependency
+  changes, and runs `pip check`.
 - Does not move, delete, or overwrite model files.
 
 ## Installation
@@ -52,6 +57,8 @@ No extra Python packages are required.
 5. For missing models, click **下载缺失模型**. You can download a Civitai or Hugging
    Face candidate or a public match from the two configured Quark Netdisk model libraries
    directly into its matching configured model folder.
+6. Missing nodes automatically query the TE official plugin market. Click **安装或更新插件**
+   only after reviewing the exact matched repository, then restart ComfyUI.
 
 The download results are search candidates. Verify the model page, license, base model,
 and filename before downloading. Some Civitai files require authentication, so their
@@ -89,6 +96,8 @@ python -m unittest discover -s tests -v
 
 Workflow model filenames are sent to Civitai, Hugging Face, and the two configured public
 Quark shares only when you explicitly click **下载缺失模型**. Regular scans remain local.
+Missing node names are sent to the TE official plugin market and ComfyUI-Manager's official
+node map to find verified plugin candidates.
 
 ## License
 

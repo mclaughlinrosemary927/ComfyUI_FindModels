@@ -63,6 +63,7 @@ EXPLICIT_MODEL_WIDGETS = (
 )
 
 CATEGORY_HINTS = (
+    ("diffusion_models", ("fantasytalking", "fantasyportrait")),
     ("upscale_models", ("rife", "frame_interpolation", "film", "upscale", "esrgan", "super_resolution", "superresolution")),
     ("controlnet", ("controlnet", "control_net", "control")),
     ("embeddings", ("embedding", "textual_inversion")),
@@ -176,7 +177,8 @@ def extract_references(payload: Any) -> list[Reference]:
             node_id=None if node_id is None else str(node_id),
             widget=None if widget is None else str(widget),
             node_type=None if node_type is None else str(node_type),
-            strict=any(term in re.sub(r"[^a-z0-9_]+", "", str(node_type or "").lower()) for term in STANDARD_LOADER_HINTS),
+            strict=model_selector
+            or any(term in re.sub(r"[^a-z0-9_]+", "", str(node_type or "").lower()) for term in STANDARD_LOADER_HINTS),
         )
         found[(ref.name.lower(), ref.category, ref.node_id, ref.widget)] = ref
 

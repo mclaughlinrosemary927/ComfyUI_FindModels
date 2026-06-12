@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import subprocess
 import tempfile
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -16,6 +17,13 @@ import folder_paths
 from server import PromptServer
 
 from .model_finder import MODEL_EXTENSIONS, analyze, basename, normalized_stem
+from .node_installer import (
+    COMFY_MANAGER_NODE_MAP_URL,
+    TE_MARKET_URL,
+    install_market_plugin,
+    market_candidates,
+    missing_node_types,
+)
 
 
 TIMEOUT = aiohttp.ClientTimeout(total=30)
@@ -55,6 +63,17 @@ DOWNLOAD_CATEGORY_ALIASES = {
     "upscale_models": ("upscale_models",),
     "embeddings": ("embeddings",),
 }
+KNOWN_MODEL_SOURCES = {
+    "fantasytalking_fp16.safetensors": {
+        "provider": "Hugging Face · Kijai/WanVideo_comfy",
+        "name": "fantasytalking_fp16.safetensors",
+        "url": "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/fantasytalking_fp16.safetensors",
+        "size": 1684038568,
+        "confidence": 1.0,
+    },
+}
+
+
 def _safe_query(name: str) -> str:
     return re.sub(r"[_\-.]+", " ", basename(name).rsplit(".", 1)[0]).strip()
 
@@ -302,7 +321,66 @@ async def _quark_candidates(
 @PromptServer.instance.routes.post("/findmodels/scan")
 async def scan_models(request: web.Request) -> web.Response:
     payload = await request.json()
-    return web.json_response(analyze(payload, folder_paths.get_filename_list))
+    result = analyze(payload, folder_paths.get_filename_list)
+    try:
+        import nodes
+
+        registered = nodes.NODE_CLASS_MAPPINGS.keys()
+    except (ImportError, AttributeError):
+        registered = ()
+    result["missing_nodes"] = missing_node_types(
+        [node.get("type") for node in payload.get("nodes", []) if isinstance(node, dict)],
+        registered,
+    )
+    return web.json_response(result)
+
+
+async def _te_market_entries(session: aiohttp.ClientSession) -> list[dict[str, Any]]:
+    data = await _get_json(session, TE_MARKET_URL)
+    return (data or {}).get("custom_nodes", [])
+
+
+async def _official_node_map(session: aiohttp.ClientSession) -> dict[str, Any]:
+    data = await _get_json(session, COMFY_MANAGER_NODE_MAP_URL)
+    return data if isinstance(data, dict) else {}
+
+
+@PromptServer.instance.routes.post("/findnodes/candidates")
+async def find_node_candidates(request: web.Request) -> web.Response:
+    payload = await request.json()
+    node_type = str(payload.get("node_type", "")).strip()
+    if not node_type:
+        raise web.HTTPBadRequest(text="Missing node type")
+    async with aiohttp.ClientSession(timeout=SOURCE_TIMEOUT, trust_env=True) as session:
+        entries, node_map = await asyncio.gather(_te_market_entries(session), _official_node_map(session))
+        candidates = market_candidates(entries, node_type, node_map)
+    return web.json_response(
+        {
+            "node_type": node_type,
+            "candidates": candidates[:8],
+            "github_search_url": f"https://github.com/search?q={quote(f'{node_type} ComfyUI')}&type=repositories",
+        }
+    )
+
+
+@PromptServer.instance.routes.post("/findnodes/install")
+async def install_node_plugin(request: web.Request) -> web.Response:
+    payload = await request.json()
+    node_type = str(payload.get("node_type", "")).strip()
+    plugin_id = str(payload.get("plugin_id", "")).strip()
+    if not node_type or not plugin_id:
+        raise web.HTTPBadRequest(text="Missing node type or plugin id")
+    async with aiohttp.ClientSession(timeout=SOURCE_TIMEOUT, trust_env=True) as session:
+        entries, node_map = await asyncio.gather(_te_market_entries(session), _official_node_map(session))
+        candidates = market_candidates(entries, node_type, node_map)
+    candidate = next((item for item in candidates if item["id"] == plugin_id), None)
+    if not candidate:
+        raise web.HTTPBadRequest(text="插件不在 TE 官方市场的精确节点匹配结果中")
+    try:
+        result = await asyncio.to_thread(install_market_plugin, folder_paths, candidate)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        raise web.HTTPBadRequest(text=str(error)) from error
+    return web.json_response(result)
 
 
 @PromptServer.instance.routes.post("/findmodels/sources")
@@ -324,6 +402,9 @@ async def find_sources(request: web.Request) -> web.Response:
     quark_results = [result for result in results[2:] if isinstance(result, list)]
     quark = [candidate for result in quark_results for candidate in result]
     exact_web = [candidate for candidate in civitai + huggingface if _exact_model_name(name, candidate["name"])]
+    known = KNOWN_MODEL_SOURCES.get(basename(name).lower())
+    if known:
+        exact_web.insert(0, dict(known))
     exact_quark = [candidate for candidate in quark if _exact_model_name(name, candidate["name"])]
     checked_web = await asyncio.gather(
         *(_validate_web_candidate(session, candidate) for candidate in exact_web),
