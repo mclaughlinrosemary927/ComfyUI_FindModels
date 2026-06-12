@@ -27,6 +27,10 @@ ALLOWED_DOWNLOAD_HOSTS = {
     "cdn-lfs-us-1.hf.co",
     "cdn-lfs-eu-1.hf.co",
 }
+QUARK_MODEL_LIBRARIES = (
+    {"name": "夸克模型库 1", "url": "https://pan.quark.cn/s/fb913d649b18"},
+    {"name": "夸克模型库 2", "url": "https://pan.quark.cn/s/4680ac8665162"},
+)
 
 
 def _safe_query(name: str) -> str:
@@ -61,6 +65,12 @@ def _target_directory(category: str) -> Path:
     target = Path(paths[0]).resolve()
     target.mkdir(parents=True, exist_ok=True)
     return target
+
+
+def _clear_filename_cache(category: str) -> None:
+    cache = getattr(folder_paths, "filename_list_cache", None)
+    if isinstance(cache, dict):
+        cache.pop(category, None)
 
 
 async def _get_json(session: aiohttp.ClientSession, url: str) -> Any:
@@ -142,8 +152,16 @@ async def find_sources(request: web.Request) -> web.Response:
             _huggingface_candidates(session, name),
         )
     candidates = sorted(civitai + huggingface, key=lambda item: item["confidence"], reverse=True)[:12]
-    quark_url = f"https://www.google.com/search?q={quote(f'site:pan.quark.cn/s/ {name}')}"
-    return web.json_response({"name": name, "candidates": candidates, "quark_url": quark_url})
+    quark_search = " OR ".join(f'"{item["url"]}"' for item in QUARK_MODEL_LIBRARIES)
+    quark_search_url = f"https://www.google.com/search?q={quote(f'{name} ({quark_search})')}"
+    return web.json_response(
+        {
+            "name": name,
+            "candidates": candidates,
+            "quark_libraries": QUARK_MODEL_LIBRARIES,
+            "quark_search_url": quark_search_url,
+        }
+    )
 
 
 @PromptServer.instance.routes.post("/findmodels/download")
@@ -175,6 +193,7 @@ async def download_model(request: web.Request) -> web.Response:
                     async for chunk in response.content.iter_chunked(1024 * 1024):
                         output.write(chunk)
         temp_path.replace(target)
+        _clear_filename_cache(category)
     except web.HTTPException:
         raise
     except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as error:
@@ -183,4 +202,6 @@ async def download_model(request: web.Request) -> web.Response:
         if temp_path and temp_path.exists():
             temp_path.unlink()
 
-    return web.json_response({"downloaded": True, "filename": filename, "category": category, "path": str(target)})
+    return web.json_response(
+        {"downloaded": True, "filename": filename, "category": category, "path": str(target)}
+    )

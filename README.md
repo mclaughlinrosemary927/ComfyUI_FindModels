@@ -28,7 +28,7 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/YOUR_NAME/ComfyUI_FindModels.git
 ```
 
-Restart ComfyUI. A persistent **FindModels 未找到 N** button appears beside the
+Restart ComfyUI. A persistent **查找模型 未找到 N** button appears beside the
 Queue/Run controls in the top toolbar. `N` updates after each workflow scan.
 
 No extra Python packages are required.
@@ -36,21 +36,23 @@ No extra Python packages are required.
 ## Usage
 
 1. Open or drag a workflow into ComfyUI.
-2. The extension scans automatically. You can also click **FindModels** in the top bar.
+2. The extension scans automatically. You can also click **查找模型** in the top bar.
 3. Review local replacement suggestions.
 4. Click **一键加载模型** to load safe high-confidence local matches into their nodes, or apply an
    individual suggestion.
 5. For missing models, click **查找下载来源**. You can download a Civitai or Hugging
-   Face candidate into its matching configured model folder, or open the Quark Netdisk
-   search link.
+   Face candidate into its matching configured model folder, or search the two configured
+   Quark Netdisk model libraries. Opening a Quark library copies the missing filename first.
 
 The download results are search candidates. Verify the model page, license, base model,
 and filename before downloading. Some Civitai files require authentication, so their
 direct URL may redirect to a sign-in page.
 
 Downloads are accepted only from approved Civitai and Hugging Face HTTPS hosts. Existing
-files are never overwritten. Quark Netdisk does not provide a stable public global-search
-API, so the extension opens a scoped web search rather than requesting account cookies.
+files are never overwritten. Completed downloads clear ComfyUI's model filename cache so
+the model appears in the matching node selector. Quark Netdisk does not provide a stable
+public share-search API, so the extension opens a scoped search or copies the filename
+before opening one of the configured libraries rather than requesting account cookies.
 
 ## Matching Rules
 

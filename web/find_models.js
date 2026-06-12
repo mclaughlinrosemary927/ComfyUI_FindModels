@@ -117,14 +117,31 @@ function ensurePanel() {
       try {
         const data = await post("/findmodels/sources", { name: sourceButton.dataset.source });
         const links = data.candidates.map((item) => sourceHtml(item, model)).join("");
+        const quarkLibraries = data.quark_libraries.map((item) => `
+          <button data-quark="${escapeHtml(item.url)}" data-query="${escapeHtml(data.name)}">
+            ${escapeHtml(item.name)}：复制模型名并打开
+          </button>`).join("");
         target.innerHTML = `${links || "<span>未找到可靠直链候选</span>"}
-          <a href="${escapeHtml(data.quark_url)}" target="_blank" rel="noopener noreferrer">在夸克网盘中查找</a>`;
+          <a href="${escapeHtml(data.quark_search_url)}" target="_blank" rel="noopener noreferrer">夸克模型库搜索直达</a>
+          ${quarkLibraries}`;
       } catch (error) {
         target.textContent = `查询失败：${error.message}`;
       } finally {
         sourceButton.disabled = false;
         sourceButton.textContent = "查找下载来源";
       }
+      return;
+    }
+
+    const quarkButton = event.target.closest("[data-quark]");
+    if (quarkButton) {
+      try {
+        await navigator.clipboard.writeText(quarkButton.dataset.query);
+        panel.querySelector(".fm-summary").textContent = `已复制模型名：${quarkButton.dataset.query}`;
+      } catch {
+        panel.querySelector(".fm-summary").textContent = `请在夸克中搜索：${quarkButton.dataset.query}`;
+      }
+      window.open(quarkButton.dataset.quark, "_blank", "noopener,noreferrer");
       return;
     }
 
@@ -187,7 +204,7 @@ async function scan(quiet = false) {
 function updateToolbarButton(missing = null, state = null) {
   const button = document.getElementById("find-models-launcher");
   if (!button) return;
-  button.textContent = state ? `FindModels ${state}` : `FindModels 未找到 ${missing ?? 0}`;
+  button.textContent = state ? `查找模型 ${state}` : `查找模型 未找到 ${missing ?? 0}`;
   button.dataset.missing = String(missing ?? 0);
   button.classList.toggle("has-missing", Number(missing) > 0);
 }
@@ -221,7 +238,7 @@ function mountToolbarButton() {
     existing = document.createElement("button");
     existing.id = "find-models-launcher";
     existing.type = "button";
-    existing.textContent = "FindModels 未找到 0";
+    existing.textContent = "查找模型 未找到 0";
     existing.title = "扫描当前工作流中的缺失模型";
     existing.onclick = () => scan(false);
     document.body.appendChild(existing);
