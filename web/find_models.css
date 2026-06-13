@@ -30,5 +30,8 @@
 .fm-sources { display: grid; gap: 5px; margin-top: 7px; }
 .fm-node-candidates { display: grid; gap: 5px; margin-top: 7px; }
 .fm-source { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; }
+.fm-download-progress {
+  grid-column: 1 / -1; min-height: 16px; color: #8fd3a8; font-size: 12px;
+}
 .fm-sources a { color: #7fb9ff; overflow-wrap: anywhere; }
 #find-models-panel button { padding: 5px 8px; color: #eee; background: #333; border: 1px solid #666; border-radius: 5px; cursor: pointer; }

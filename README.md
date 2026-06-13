@@ -21,6 +21,7 @@ candidate direct-download URLs from Civitai and Hugging Face.
 - Downloads selected Civitai, Hugging Face, or public Quark-share candidates into the matching configured
   ComfyUI model folder.
 - Shows candidate file sizes and loads successfully downloaded files into their workflow nodes.
+- Shows live downloaded bytes, total size, and percentage while a model download is running.
 - Searches the configured Quark Netdisk libraries directly for missing model filenames.
 - Ignores serialized workflow metadata, URLs, free-text fields, and generic `model`
   fields on non-loader custom nodes to prevent false missing-model reports.

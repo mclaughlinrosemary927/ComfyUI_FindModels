@@ -19,13 +19,39 @@ function formatSize(value) {
   return `${(size / (1024 ** index)).toFixed(index > 1 ? 2 : 0)} ${units[index]}`;
 }
 
+function downloadProgressText(job) {
+  const downloaded = formatSize(job.downloaded);
+  const total = Number(job.total);
+  if (!Number.isFinite(total) || total <= 0) return `已下载 ${downloaded}`;
+  const percent = Math.min(100, Math.round((Number(job.downloaded || 0) / total) * 100));
+  return `已下载 ${downloaded} / ${formatSize(total)} · ${percent}%`;
+}
+
+async function waitForDownload(jobId, progressElement) {
+  while (true) {
+    const job = await post("/findmodels/download/progress", { job_id: jobId });
+    progressElement.textContent = downloadProgressText(job);
+    if (job.status === "completed") return job.result;
+    if (job.status === "failed") throw new Error(job.error || "下载失败");
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+  }
+}
+
 function workflowSnapshot() {
   return {
     nodes: app.graph?._nodes?.map((node) => ({
       id: node.id,
       type: node.type,
       widgets: (node.widgets || []).flatMap((widget) => {
-        const values = Array.isArray(widget.options?.values) ? widget.options.values : [];
+        let rawValues = widget.options?.values;
+        if (typeof rawValues === "function") {
+          try {
+            rawValues = rawValues();
+          } catch (error) {
+            console.debug("[ComfyUI_FindModels] Unable to inspect combo values", widget.name, error);
+          }
+        }
+        const values = Array.isArray(rawValues) ? rawValues : [];
         const isModelSelector = values.some((value) =>
           typeof value === "string" && /\.(bin|ckpt|gguf|onnx|pt|pth|safetensors)$/i.test(value),
         );
@@ -91,6 +117,7 @@ function sourceHtml(item, model) {
       data-size="${escapeHtml(item.size || "")}"
       data-category="${escapeHtml(model.category)}" data-node-id="${escapeHtml(model.node_id)}"
       data-widget="${escapeHtml(model.widget)}" data-original="${escapeHtml(model.name)}">下载到模型目录</button>
+    <div class="fm-download-progress" aria-live="polite"></div>
   </div>`;
 }
 
@@ -184,14 +211,16 @@ function ensurePanel() {
     if (!downloadButton) return;
     downloadButton.disabled = true;
     downloadButton.textContent = "正在下载…";
+    const progressElement = downloadButton.closest(".fm-source").querySelector(".fm-download-progress");
     try {
-      const downloaded = await post("/findmodels/download", {
+      const job = await post("/findmodels/download/start", {
         url: downloadButton.dataset.download,
         quark: downloadButton.dataset.quarkDownload ? JSON.parse(downloadButton.dataset.quarkDownload) : null,
         filename: downloadButton.dataset.filename,
         size: downloadButton.dataset.size || null,
         category: downloadButton.dataset.category,
       });
+      const downloaded = await waitForDownload(job.id, progressElement);
       downloadButton.textContent = "下载完成，正在加载";
       await applyMatch({
         node_id: downloadButton.dataset.nodeId,

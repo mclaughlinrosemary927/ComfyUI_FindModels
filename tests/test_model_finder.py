@@ -180,6 +180,41 @@ class ModelFinderTests(unittest.TestCase):
         result = analyze(payload, lambda category: [])
         self.assertEqual(result["models"][0]["category"], "diffusion_models")
 
+    def test_detects_missing_model_in_custom_loader_with_translated_widget(self):
+        payload = {
+            "nodes": [{
+                "id": 22,
+                "type": "WanVideo Model Loader",
+                "widgets": [{
+                    "name": "模型",
+                    "value": "Wan/Wan14Bi2vFusioniX_fp8.safetensors",
+                    "model_selector": False,
+                }],
+            }]
+        }
+        result = analyze(payload, lambda category: [])
+        self.assertEqual(result["summary"]["missing"], 1)
+        self.assertEqual(result["models"][0]["category"], "diffusion_models")
+        self.assertEqual(result["models"][0]["name"], "Wan/Wan14Bi2vFusioniX_fp8.safetensors")
+
+    def test_hides_installed_model_in_custom_loader_with_translated_widget(self):
+        payload = {
+            "nodes": [{
+                "id": 22,
+                "type": "WanVideo Model Loader",
+                "widgets": [{
+                    "name": "模型",
+                    "value": "Wan/Wan14Bi2vFusioniX_fp8.safetensors",
+                    "model_selector": False,
+                }],
+            }]
+        }
+        result = analyze(
+            payload,
+            lambda category: ["Wan/Wan14Bi2vFusioniX_fp8.safetensors"] if category == "diffusion_models" else [],
+        )
+        self.assertEqual(result["models"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

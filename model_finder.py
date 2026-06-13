@@ -63,7 +63,7 @@ EXPLICIT_MODEL_WIDGETS = (
 )
 
 CATEGORY_HINTS = (
-    ("diffusion_models", ("fantasytalking", "fantasyportrait")),
+    ("diffusion_models", ("fantasytalking", "fantasyportrait", "wanvideo")),
     ("upscale_models", ("rife", "frame_interpolation", "film", "upscale", "esrgan", "super_resolution", "superresolution")),
     ("controlnet", ("controlnet", "control_net", "control")),
     ("embeddings", ("embedding", "textual_inversion")),
@@ -168,7 +168,10 @@ def extract_references(payload: Any) -> list[Reference]:
         node_hint = re.sub(r"[^a-z0-9_]+", "", str(node_type or "").lower())
         if node_id is not None:
             explicit_widget = widget_hint in EXPLICIT_MODEL_WIDGETS
-            loader_widget = "loader" in node_hint and any(term in widget_hint for term in MODEL_WIDGET_HINTS)
+            # Custom loaders frequently translate the widget label (for example
+            # "模型"), so the file extension plus the loader node type is the
+            # reliable signal. Non-loader custom nodes remain excluded.
+            loader_widget = "loader" in node_hint
             if not explicit_widget and not loader_widget and not model_selector:
                 return
         ref = Reference(
@@ -178,7 +181,8 @@ def extract_references(payload: Any) -> list[Reference]:
             widget=None if widget is None else str(widget),
             node_type=None if node_type is None else str(node_type),
             strict=model_selector
-            or any(term in re.sub(r"[^a-z0-9_]+", "", str(node_type or "").lower()) for term in STANDARD_LOADER_HINTS),
+            or "loader" in node_hint
+            or any(term in node_hint for term in STANDARD_LOADER_HINTS),
         )
         found[(ref.name.lower(), ref.category, ref.node_id, ref.widget)] = ref
 

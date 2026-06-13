@@ -5,6 +5,8 @@ import os
 import re
 import subprocess
 import tempfile
+import time
+import uuid
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -73,6 +75,8 @@ KNOWN_MODEL_SOURCES = {
         "confidence": 1.0,
     },
 }
+DOWNLOAD_JOBS: dict[str, dict[str, Any]] = {}
+DOWNLOAD_TASKS: dict[str, asyncio.Task[Any]] = {}
 
 
 def _safe_query(name: str) -> str:
@@ -458,9 +462,7 @@ async def _quark_download_url(session: aiohttp.ClientSession, payload: dict[str,
     raise web.HTTPBadGateway(text=f"夸克拒绝直链下载：{detail}")
 
 
-@PromptServer.instance.routes.post("/findmodels/download")
-async def download_model(request: web.Request) -> web.Response:
-    payload = await request.json()
+async def _download_model_payload(payload: dict[str, Any], progress: dict[str, Any] | None = None) -> dict[str, Any]:
     url = str(payload.get("url", "")).strip()
     quark = payload.get("quark")
     category = str(payload.get("category", "")).strip()
@@ -478,6 +480,15 @@ async def download_model(request: web.Request) -> web.Response:
 
     temp_path: Path | None = None
     try:
+        if progress is not None:
+            progress.update(
+                status="downloading",
+                filename=filename,
+                category=category,
+                downloaded=0,
+                total=expected_size,
+                updated_at=time.time(),
+            )
         fd, temp_name = tempfile.mkstemp(prefix=f".{filename}.", suffix=".part", dir=target_dir)
         os.close(fd)
         temp_path = Path(temp_name)
@@ -495,9 +506,21 @@ async def download_model(request: web.Request) -> web.Response:
                 content_type = response.headers.get("Content-Type", "").lower()
                 if "text/html" in content_type or "application/json" in content_type:
                     raise web.HTTPBadGateway(text="下载地址返回了网页或错误信息，而不是模型文件")
+                response_size = _size_value(
+                    response.headers.get("X-Linked-Size")
+                    or response.headers.get("X-File-Size")
+                    or response.headers.get("Content-Length")
+                )
+                total = expected_size or response_size
+                downloaded = 0
+                if progress is not None:
+                    progress.update(total=total, updated_at=time.time())
                 with temp_path.open("wb") as output:
                     async for chunk in response.content.iter_chunked(1024 * 1024):
                         output.write(chunk)
+                        downloaded += len(chunk)
+                        if progress is not None:
+                            progress.update(downloaded=downloaded, total=total, updated_at=time.time())
         if not _is_model_payload(temp_path):
             raise web.HTTPBadGateway(text="下载结果不是有效模型文件，可能是登录页面、错误信息或 Git LFS 指针")
         temp_path.replace(target)
@@ -514,13 +537,69 @@ async def download_model(request: web.Request) -> web.Response:
         if temp_path and temp_path.exists():
             temp_path.unlink()
 
-    return web.json_response(
-        {
-            "downloaded": True,
-            "filename": filename,
-            "relative_name": filename,
-            "category": category,
-            "path": str(target),
-            "size": target.stat().st_size,
-        }
-    )
+    return {
+        "downloaded": True,
+        "filename": filename,
+        "relative_name": filename,
+        "category": category,
+        "path": str(target),
+        "size": target.stat().st_size,
+    }
+
+
+async def _run_download_job(job_id: str, payload: dict[str, Any]) -> None:
+    progress = DOWNLOAD_JOBS[job_id]
+    try:
+        result = await _download_model_payload(payload, progress)
+        progress.update(status="completed", result=result, downloaded=result["size"], total=result["size"])
+    except Exception as error:
+        progress.update(status="failed", error=getattr(error, "text", None) or str(error))
+    finally:
+        progress["updated_at"] = time.time()
+        DOWNLOAD_TASKS.pop(job_id, None)
+
+
+def _purge_download_jobs() -> None:
+    cutoff = time.time() - 3600
+    for job_id, job in list(DOWNLOAD_JOBS.items()):
+        if job.get("status") in {"completed", "failed"} and job.get("updated_at", 0) < cutoff:
+            DOWNLOAD_JOBS.pop(job_id, None)
+
+
+@PromptServer.instance.routes.post("/findmodels/download/start")
+async def start_download_model(request: web.Request) -> web.Response:
+    payload = await request.json()
+    _safe_filename(str(payload.get("filename", "")))
+    category = str(payload.get("category", "")).strip()
+    _target_directory(category)
+    if not payload.get("quark") and not _allowed_download_url(str(payload.get("url", "")).strip()):
+        raise web.HTTPBadRequest(text="Only approved HTTPS model providers are allowed")
+    _purge_download_jobs()
+    job_id = uuid.uuid4().hex
+    DOWNLOAD_JOBS[job_id] = {
+        "id": job_id,
+        "status": "queued",
+        "filename": basename(str(payload.get("filename", ""))),
+        "category": category,
+        "downloaded": 0,
+        "total": _size_value(payload.get("size")),
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+    DOWNLOAD_TASKS[job_id] = asyncio.create_task(_run_download_job(job_id, payload))
+    return web.json_response(DOWNLOAD_JOBS[job_id])
+
+
+@PromptServer.instance.routes.post("/findmodels/download/progress")
+async def download_model_progress(request: web.Request) -> web.Response:
+    payload = await request.json()
+    job_id = str(payload.get("job_id", "")).strip()
+    job = DOWNLOAD_JOBS.get(job_id)
+    if not job:
+        raise web.HTTPNotFound(text="Download task not found")
+    return web.json_response(job)
+
+
+@PromptServer.instance.routes.post("/findmodels/download")
+async def download_model(request: web.Request) -> web.Response:
+    return web.json_response(await _download_model_payload(await request.json()))
