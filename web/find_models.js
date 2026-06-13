@@ -45,7 +45,14 @@ async function waitForDownload(jobId, progressElement) {
 }
 
 function workflowSnapshot() {
+  let serializedGraph = null;
+  try {
+    serializedGraph = app.graph?.serialize?.();
+  } catch (error) {
+    console.debug("[ComfyUI_FindModels] Unable to serialize graph", error);
+  }
   return {
+    models: serializedGraph?.models || [],
     nodes: app.graph?._nodes?.map((node) => {
       let serialized = null;
       try {
@@ -56,6 +63,7 @@ function workflowSnapshot() {
       return {
         id: node.id,
         type: node.type,
+        models: node.properties?.models || [],
         widgets_values: serialized?.widgets_values || [],
         widgets: (node.widgets || []).flatMap((widget) => {
           let rawValues = widget.options?.values;
@@ -70,11 +78,20 @@ function workflowSnapshot() {
           const isModelSelector = values.some((value) =>
             typeof value === "string" && /\.(bin|ckpt|gguf|onnx|pt|pth|safetensors)$/i.test(value),
           );
+          const normalizedValue = typeof widget.value === "string"
+            ? widget.value.replaceAll("\\", "/")
+            : null;
+          const modelValueValid = isModelSelector && normalizedValue !== null
+            ? values.some((value) =>
+              typeof value === "string" && value.replaceAll("\\", "/") === normalizedValue
+            )
+            : null;
           return [{
             name: widget.name,
             type: widget.type,
             value: widget.value,
             model_selector: isModelSelector,
+            model_value_valid: modelValueValid,
           }];
         }),
       };
@@ -275,7 +292,7 @@ function render(result, quiet) {
     </article>`).join("");
   panel.querySelector(".fm-list").innerHTML = nodeHtml + result.models.map((model) => `
     <article class="fm-item fm-${escapeHtml(model.status)}">
-      <div><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.category)} · ${escapeHtml(statusText(model.status))}</span></div>
+      <div><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.category)} · ${escapeHtml(model.official_missing ? "官方判定缺失" : statusText(model.status))}</span></div>
       ${model.match ? `<div class="fm-match">本地候选：${escapeHtml(model.match.name)} (${Math.round(model.match.confidence * 100)}%) ${model.match.auto_apply ? `<button data-apply="${escapeHtml(model.node_id)}:${escapeHtml(model.widget)}">加载</button>` : ""}</div>` : ""}
       ${model.status === "missing" ? `<button data-source="${escapeHtml(model.name)}">下载缺失模型</button><div class="fm-sources"></div>` : ""}
     </article>`).join("") || "<p>当前工作流中未发现缺失节点或模型。</p>";

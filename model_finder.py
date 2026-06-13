@@ -109,6 +109,7 @@ class Reference:
     widget: str | None = None
     node_type: str | None = None
     strict: bool = True
+    official_missing: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -118,6 +119,7 @@ class Reference:
             "widget": self.widget,
             "node_type": self.node_type,
             "strict": self.strict,
+            "official_missing": self.official_missing,
         }
 
 
@@ -161,6 +163,7 @@ def extract_references(payload: Any) -> list[Reference]:
         widget: Any = None,
         node_type: Any = None,
         model_selector: bool = False,
+        model_value_valid: bool | None = None,
     ) -> None:
         if not is_model_name(value):
             return
@@ -183,6 +186,7 @@ def extract_references(payload: Any) -> list[Reference]:
             strict=model_selector
             or "loader" in node_hint
             or any(term in node_hint for term in STANDARD_LOADER_HINTS),
+            official_missing=model_selector and model_value_valid is False,
         )
         found[(ref.name.lower(), ref.category, ref.node_id, ref.widget)] = ref
 
@@ -199,6 +203,15 @@ def extract_references(payload: Any) -> list[Reference]:
 
         current_id = value.get("id", node_id)
         current_type = value.get("type") or value.get("class_type") or node_type
+        if isinstance(value.get("name"), str) and isinstance(value.get("directory"), str):
+            add(
+                value["name"],
+                f"{hint} {value['directory']}",
+                current_id,
+                None,
+                current_type,
+                True,
+            )
         if isinstance(value.get("widgets"), list):
             for widget in value["widgets"]:
                 if isinstance(widget, dict):
@@ -215,6 +228,7 @@ def extract_references(payload: Any) -> list[Reference]:
                                 widget_name,
                                 current_type,
                                 bool(widget.get("model_selector")),
+                                widget.get("model_value_valid"),
                             )
                         elif isinstance(item, list):
                             for nested in item:
@@ -228,7 +242,7 @@ def extract_references(payload: Any) -> list[Reference]:
         for key, item in value.items():
             if key == "widgets":
                 continue
-            if current_id is None and key != "nodes":
+            if current_id is None and key not in {"nodes", "models"}:
                 continue
             walk(item, f"{hint} {current_type or ''} {key}", current_id, current_type)
 
@@ -288,7 +302,15 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
         return {"status": "missing", "match": None}
 
     score, name, category, reason = best
-    status = "installed" if reason == "exact_path" else "adaptable" if score >= 0.78 else "missing"
+    status = (
+        "missing"
+        if reference.official_missing
+        else "installed"
+        if reason == "exact_path"
+        else "adaptable"
+        if score >= 0.78
+        else "missing"
+    )
     return {
         "status": status,
         "match": {
@@ -296,7 +318,12 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
             "category": category,
             "confidence": round(score, 3),
             "reason": reason,
-            "auto_apply": status == "adaptable" and score >= 0.86 and reference.node_id is not None,
+            "auto_apply": (
+                score >= 0.86
+                and reference.node_id is not None
+                and reason != "exact_path"
+                and status in {"adaptable", "missing"}
+            ),
         },
     }
 

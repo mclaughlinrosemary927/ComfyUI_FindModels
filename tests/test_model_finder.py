@@ -262,6 +262,75 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(result["summary"]["adaptable"], 1)
         self.assertEqual(result["models"][0]["category"], "vae")
 
+    def test_official_combo_missing_stays_missing_even_when_file_exists(self):
+        payload = {
+            "nodes": [{
+                "id": 22,
+                "type": "WanVideoModelLoader",
+                "widgets": [{
+                    "name": "model",
+                    "value": "Wan/Wan14Bi2vFusioniX_fp8.safetensors",
+                    "model_selector": True,
+                    "model_value_valid": False,
+                }],
+            }]
+        }
+        result = analyze(
+            payload,
+            lambda category: ["Wan/Wan14Bi2vFusioniX_fp8.safetensors"] if category == "diffusion_models" else [],
+        )
+        self.assertEqual(result["summary"]["missing"], 1)
+        self.assertTrue(result["models"][0]["official_missing"])
+
+    def test_official_combo_valid_hides_installed_model(self):
+        payload = {
+            "nodes": [{
+                "id": 22,
+                "type": "WanVideoModelLoader",
+                "widgets": [{
+                    "name": "model",
+                    "value": "Wan/Wan14Bi2vFusioniX_fp8.safetensors",
+                    "model_selector": True,
+                    "model_value_valid": True,
+                }],
+            }]
+        }
+        result = analyze(
+            payload,
+            lambda category: ["Wan/Wan14Bi2vFusioniX_fp8.safetensors"] if category == "diffusion_models" else [],
+        )
+        self.assertEqual(result["models"], [])
+
+    def test_scans_official_embedded_node_model_metadata(self):
+        payload = {
+            "nodes": [{
+                "id": 22,
+                "type": "WanVideoModelLoader",
+                "models": [{
+                    "name": "embedded-missing.safetensors",
+                    "directory": "diffusion_models",
+                    "url": "https://huggingface.co/example/model",
+                }],
+                "widgets": [],
+            }]
+        }
+        result = analyze(payload, lambda category: [])
+        self.assertEqual(result["summary"]["missing"], 1)
+        self.assertEqual(result["models"][0]["name"], "embedded-missing.safetensors")
+
+    def test_scans_official_top_level_model_metadata(self):
+        payload = {
+            "models": [{
+                "name": "top-level-missing.safetensors",
+                "directory": "loras",
+                "url": "https://huggingface.co/example/model",
+            }],
+            "nodes": [],
+        }
+        result = analyze(payload, lambda category: [])
+        self.assertEqual(result["summary"]["missing"], 1)
+        self.assertEqual(result["models"][0]["category"], "loras")
+
 
 if __name__ == "__main__":
     unittest.main()
