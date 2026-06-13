@@ -19,6 +19,13 @@ function formatSize(value) {
   return `${(size / (1024 ** index)).toFixed(index > 1 ? 2 : 0)} ${units[index]}`;
 }
 
+function statusText(status) {
+  return {
+    adaptable: "路径不一致，可一键加载",
+    missing: "缺失",
+  }[status] || status;
+}
+
 function downloadProgressText(job) {
   const downloaded = formatSize(job.downloaded);
   const total = Number(job.total);
@@ -39,25 +46,39 @@ async function waitForDownload(jobId, progressElement) {
 
 function workflowSnapshot() {
   return {
-    nodes: app.graph?._nodes?.map((node) => ({
-      id: node.id,
-      type: node.type,
-      widgets: (node.widgets || []).flatMap((widget) => {
-        let rawValues = widget.options?.values;
-        if (typeof rawValues === "function") {
-          try {
-            rawValues = rawValues();
-          } catch (error) {
-            console.debug("[ComfyUI_FindModels] Unable to inspect combo values", widget.name, error);
+    nodes: app.graph?._nodes?.map((node) => {
+      let serialized = null;
+      try {
+        serialized = node.serialize?.();
+      } catch (error) {
+        console.debug("[ComfyUI_FindModels] Unable to serialize node", node.type, error);
+      }
+      return {
+        id: node.id,
+        type: node.type,
+        widgets_values: serialized?.widgets_values || [],
+        widgets: (node.widgets || []).flatMap((widget) => {
+          let rawValues = widget.options?.values;
+          if (typeof rawValues === "function") {
+            try {
+              rawValues = rawValues();
+            } catch (error) {
+              console.debug("[ComfyUI_FindModels] Unable to inspect combo values", widget.name, error);
+            }
           }
-        }
-        const values = Array.isArray(rawValues) ? rawValues : [];
-        const isModelSelector = values.some((value) =>
-          typeof value === "string" && /\.(bin|ckpt|gguf|onnx|pt|pth|safetensors)$/i.test(value),
-        );
-        return [{ name: widget.name, value: widget.value, model_selector: isModelSelector }];
-      }),
-    })) || [],
+          const values = Array.isArray(rawValues) ? rawValues : [];
+          const isModelSelector = values.some((value) =>
+            typeof value === "string" && /\.(bin|ckpt|gguf|onnx|pt|pth|safetensors)$/i.test(value),
+          );
+          return [{
+            name: widget.name,
+            type: widget.type,
+            value: widget.value,
+            model_selector: isModelSelector,
+          }];
+        }),
+      };
+    }) || [],
   };
 }
 
@@ -254,7 +275,7 @@ function render(result, quiet) {
     </article>`).join("");
   panel.querySelector(".fm-list").innerHTML = nodeHtml + result.models.map((model) => `
     <article class="fm-item fm-${escapeHtml(model.status)}">
-      <div><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.category)} · ${escapeHtml(model.status)}</span></div>
+      <div><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.category)} · ${escapeHtml(statusText(model.status))}</span></div>
       ${model.match ? `<div class="fm-match">本地候选：${escapeHtml(model.match.name)} (${Math.round(model.match.confidence * 100)}%) ${model.match.auto_apply ? `<button data-apply="${escapeHtml(model.node_id)}:${escapeHtml(model.widget)}">加载</button>` : ""}</div>` : ""}
       ${model.status === "missing" ? `<button data-source="${escapeHtml(model.name)}">下载缺失模型</button><div class="fm-sources"></div>` : ""}
     </article>`).join("") || "<p>当前工作流中未发现缺失节点或模型。</p>";

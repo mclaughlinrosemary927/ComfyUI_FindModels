@@ -7,6 +7,7 @@ candidate direct-download URLs from Civitai and Hugging Face.
 ## Features
 
 - Scans explicit model-selector widgets on the live workflow after a workflow opens.
+- Scans live widget values, nested custom-widget values, and serialized widget values used by dynamic custom loaders.
 - Recognizes checkpoints, LoRAs, VAEs, ControlNet, text encoders, diffusion models,
   embeddings, and upscale models.
 - Uses ComfyUI's configured model paths, including paths from `extra_model_paths.yaml`.

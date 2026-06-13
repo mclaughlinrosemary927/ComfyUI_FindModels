@@ -215,6 +215,53 @@ class ModelFinderTests(unittest.TestCase):
         )
         self.assertEqual(result["models"], [])
 
+    def test_extracts_serialized_widget_values_from_live_node_snapshot(self):
+        payload = {
+            "nodes": [{
+                "id": 22,
+                "type": "WanVideoModelLoader",
+                "widgets": [],
+                "widgets_values": ["FusioniX/Wan14Bi2vFusioniX_fp8.safetensors", "fp16_fast"],
+            }]
+        }
+        result = analyze(
+            payload,
+            lambda category: ["Wan/Wan14Bi2vFusioniX_fp8.safetensors"] if category == "diffusion_models" else [],
+        )
+        self.assertEqual(result["summary"]["adaptable"], 1)
+        self.assertEqual(result["models"][0]["name"], "FusioniX/Wan14Bi2vFusioniX_fp8.safetensors")
+        self.assertEqual(result["models"][0]["match"]["name"], "Wan/Wan14Bi2vFusioniX_fp8.safetensors")
+
+    def test_extracts_model_filename_nested_in_custom_widget_value(self):
+        payload = {
+            "nodes": [{
+                "id": 23,
+                "type": "CustomModelLoader",
+                "widgets": [{
+                    "name": "model",
+                    "value": {"selected": ["folder/missing.safetensors"]},
+                }],
+            }]
+        }
+        result = analyze(payload, lambda category: [])
+        self.assertEqual(result["summary"]["missing"], 1)
+        self.assertEqual(result["models"][0]["name"], "folder/missing.safetensors")
+
+    def test_wanvideo_vae_loader_is_classified_as_vae_before_wanvideo(self):
+        payload = {
+            "nodes": [{
+                "id": 38,
+                "type": "WanVideoVAELoader",
+                "widgets_values": ["万相KJ/Wan2_1_VAE_bf16.safetensors", "bf16"],
+            }]
+        }
+        result = analyze(
+            payload,
+            lambda category: ["Wan2_1_VAE_bf16.safetensors"] if category == "vae" else [],
+        )
+        self.assertEqual(result["summary"]["adaptable"], 1)
+        self.assertEqual(result["models"][0]["category"], "vae")
+
 
 if __name__ == "__main__":
     unittest.main()

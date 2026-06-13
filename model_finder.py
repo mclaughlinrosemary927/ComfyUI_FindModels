@@ -63,7 +63,7 @@ EXPLICIT_MODEL_WIDGETS = (
 )
 
 CATEGORY_HINTS = (
-    ("diffusion_models", ("fantasytalking", "fantasyportrait", "wanvideo")),
+    ("diffusion_models", ("fantasytalking", "fantasyportrait")),
     ("upscale_models", ("rife", "frame_interpolation", "film", "upscale", "esrgan", "super_resolution", "superresolution")),
     ("controlnet", ("controlnet", "control_net", "control")),
     ("embeddings", ("embedding", "textual_inversion")),
@@ -71,7 +71,7 @@ CATEGORY_HINTS = (
     ("loras", ("lora", "lycoris")),
     ("clip_vision", ("clip_vision", "clip vision")),
     ("text_encoders", ("text_encoder", "text encoder", "clip", "t5")),
-    ("diffusion_models", ("diffusion_model", "diffusion model", "unet")),
+    ("diffusion_models", ("diffusion_model", "diffusion model", "unet", "wanvideo")),
     ("checkpoints", ("checkpoint", "ckpt", "model_name", "model name")),
 )
 
@@ -204,20 +204,31 @@ def extract_references(payload: Any) -> list[Reference]:
                 if isinstance(widget, dict):
                     widget_name = widget.get("name")
                     widget_value = widget.get("value")
-                    if isinstance(widget_value, str):
-                        add(
-                            widget_value,
-                            f"{hint} {current_type or ''} {widget_name or ''}",
-                            current_id,
-                            widget_name,
-                            current_type,
-                            bool(widget.get("model_selector")),
-                        )
+                    widget_hint = f"{hint} {current_type or ''} {widget_name or ''}"
+
+                    def add_widget_value(item: Any) -> None:
+                        if isinstance(item, str):
+                            add(
+                                item,
+                                widget_hint,
+                                current_id,
+                                widget_name,
+                                current_type,
+                                bool(widget.get("model_selector")),
+                            )
+                        elif isinstance(item, list):
+                            for nested in item:
+                                add_widget_value(nested)
+                        elif isinstance(item, dict):
+                            for nested in item.values():
+                                add_widget_value(nested)
+
+                    add_widget_value(widget_value)
 
         for key, item in value.items():
             if key == "widgets":
                 continue
-            if node_id is None and key != "nodes":
+            if current_id is None and key != "nodes":
                 continue
             walk(item, f"{hint} {current_type or ''} {key}", current_id, current_type)
 
