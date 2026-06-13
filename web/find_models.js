@@ -4,6 +4,8 @@ import { api } from "../../scripts/api.js";
 const EXTENSION = "ComfyUI.FindModels";
 let lastResult = null;
 let toolbarObserver = null;
+let downloadMonitor = null;
+const downloadStatuses = new Map();
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -32,16 +34,6 @@ function downloadProgressText(job) {
   if (!Number.isFinite(total) || total <= 0) return `已下载 ${downloaded}`;
   const percent = Math.min(100, Math.round((Number(job.downloaded || 0) / total) * 100));
   return `已下载 ${downloaded} / ${formatSize(total)} · ${percent}%`;
-}
-
-async function waitForDownload(jobId, progressElement) {
-  while (true) {
-    const job = await post("/findmodels/download/progress", { job_id: jobId });
-    progressElement.textContent = downloadProgressText(job);
-    if (job.status === "completed") return job.result;
-    if (job.status === "failed") throw new Error(job.error || "下载失败");
-    await new Promise((resolve) => window.setTimeout(resolve, 500));
-  }
 }
 
 function workflowSnapshot() {
@@ -107,6 +99,50 @@ async function post(path, body) {
   });
   if (!response.ok) throw new Error(await response.text());
   return response.json();
+}
+
+async function get(path) {
+  const response = await api.fetchApi(path);
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+function downloadJobsHtml(jobs) {
+  if (!jobs.length) return "";
+  return `<section class="fm-download-jobs"><strong>模型下载任务</strong>${jobs.map((job) => `
+    <div class="fm-download-job fm-download-${escapeHtml(job.status)}">
+      <span>${escapeHtml(job.filename)}</span>
+      <span>${escapeHtml(job.status === "failed" ? `失败：${job.error || "未知错误"}` : downloadProgressText(job))}</span>
+    </div>`).join("")}</section>`;
+}
+
+async function refreshDownloadJobs() {
+  const panel = ensurePanel();
+  try {
+    const { jobs = [] } = await get("/findmodels/download/jobs");
+    panel.querySelector(".fm-downloads").innerHTML = downloadJobsHtml(jobs);
+    for (const job of jobs) {
+      const previous = downloadStatuses.get(job.id);
+      downloadStatuses.set(job.id, job.status);
+      if (job.status === "completed" && previous && previous !== "completed") {
+        await applyMatch({
+          node_id: job.node_id,
+          widget: job.widget,
+          name: job.original,
+          match: { name: job.result?.relative_name },
+        });
+        window.setTimeout(() => scan(true), 300);
+      }
+    }
+  } catch (error) {
+    console.warn("[ComfyUI_FindModels] Unable to refresh download jobs", error);
+  }
+}
+
+function startDownloadMonitor() {
+  window.clearInterval(downloadMonitor);
+  refreshDownloadJobs();
+  downloadMonitor = window.setInterval(refreshDownloadJobs, 750);
 }
 
 function findTargetWidget(node, model) {
@@ -181,7 +217,7 @@ function ensurePanel() {
       <button data-action="scan">扫描当前工作流</button>
       <button data-action="adapt">一键加载模型</button>
     </div>
-    <div class="fm-summary">尚未扫描</div><div class="fm-list"></div>`;
+    <div class="fm-summary">尚未扫描</div><div class="fm-downloads"></div><div class="fm-list"></div>`;
   document.body.appendChild(panel);
   panel.querySelector('[data-action="close"]').onclick = () => panel.classList.remove("open");
   panel.querySelector('[data-action="scan"]').onclick = () => scan(false);
@@ -249,7 +285,6 @@ function ensurePanel() {
     if (!downloadButton) return;
     downloadButton.disabled = true;
     downloadButton.textContent = "正在下载…";
-    const progressElement = downloadButton.closest(".fm-source").querySelector(".fm-download-progress");
     try {
       const job = await post("/findmodels/download/start", {
         url: downloadButton.dataset.download,
@@ -257,16 +292,13 @@ function ensurePanel() {
         filename: downloadButton.dataset.filename,
         size: downloadButton.dataset.size || null,
         category: downloadButton.dataset.category,
-      });
-      const downloaded = await waitForDownload(job.id, progressElement);
-      downloadButton.textContent = "下载完成，正在加载";
-      await applyMatch({
         node_id: downloadButton.dataset.nodeId,
         widget: downloadButton.dataset.widget,
-        name: downloadButton.dataset.original,
-        match: { name: downloaded.relative_name },
+        original: downloadButton.dataset.original,
       });
-      window.setTimeout(() => scan(false), 500);
+      downloadStatuses.set(job.id, job.status);
+      downloadButton.textContent = "后台下载中";
+      await refreshDownloadJobs();
     } catch (error) {
       downloadButton.disabled = false;
       downloadButton.textContent = "下载失败，重试";
@@ -416,6 +448,7 @@ app.registerExtension({
     document.head.appendChild(style);
     ensurePanel();
     watchTopToolbar();
+    startDownloadMonitor();
     window.setTimeout(() => scan(true), 1200);
   },
   async afterConfigureGraph() {

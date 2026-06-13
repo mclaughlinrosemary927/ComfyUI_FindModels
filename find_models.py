@@ -575,12 +575,28 @@ async def start_download_model(request: web.Request) -> web.Response:
     if not payload.get("quark") and not _allowed_download_url(str(payload.get("url", "")).strip()):
         raise web.HTTPBadRequest(text="Only approved HTTPS model providers are allowed")
     _purge_download_jobs()
+    filename = basename(str(payload.get("filename", "")))
+    existing = next(
+        (
+            job
+            for job in DOWNLOAD_JOBS.values()
+            if job.get("filename", "").lower() == filename.lower()
+            and job.get("category") == category
+            and job.get("status") in {"queued", "downloading"}
+        ),
+        None,
+    )
+    if existing:
+        return web.json_response(existing)
     job_id = uuid.uuid4().hex
     DOWNLOAD_JOBS[job_id] = {
         "id": job_id,
         "status": "queued",
-        "filename": basename(str(payload.get("filename", ""))),
+        "filename": filename,
         "category": category,
+        "original": str(payload.get("original", "")),
+        "node_id": payload.get("node_id"),
+        "widget": payload.get("widget"),
         "downloaded": 0,
         "total": _size_value(payload.get("size")),
         "created_at": time.time(),
@@ -588,6 +604,13 @@ async def start_download_model(request: web.Request) -> web.Response:
     }
     DOWNLOAD_TASKS[job_id] = asyncio.create_task(_run_download_job(job_id, payload))
     return web.json_response(DOWNLOAD_JOBS[job_id])
+
+
+@PromptServer.instance.routes.get("/findmodels/download/jobs")
+async def download_model_jobs(request: web.Request) -> web.Response:
+    _purge_download_jobs()
+    jobs = sorted(DOWNLOAD_JOBS.values(), key=lambda job: job.get("created_at", 0), reverse=True)
+    return web.json_response({"jobs": jobs})
 
 
 @PromptServer.instance.routes.post("/findmodels/download/progress")

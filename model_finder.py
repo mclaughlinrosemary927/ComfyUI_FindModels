@@ -258,7 +258,7 @@ def extract_references(payload: Any) -> list[Reference]:
     for ref in filtered:
         key = (ref.name.lower(), ref.node_id, ref.widget)
         current = deduplicated.get(key)
-        if current is None or current.category == "unknown":
+        if current is None or (ref.official_missing and not current.official_missing) or current.category == "unknown":
             deduplicated[key] = ref
     return list(deduplicated.values())
 
@@ -340,7 +340,15 @@ def analyze(payload: Any, get_filename_list: Callable[[str], Iterable[str]]) -> 
             continue
         key = item["name"].lower()
         current = unresolved_by_name.get(key)
-        if current is None or (current["status"] == "missing" and item["status"] == "adaptable"):
+        if (
+            current is None
+            or (item["official_missing"] and not current["official_missing"])
+            or (
+                item["status"] == "missing"
+                and current["status"] == "adaptable"
+                and item["official_missing"] == current["official_missing"]
+            )
+        ):
             unresolved_by_name[key] = item
     unresolved = list(unresolved_by_name.values())
     return {

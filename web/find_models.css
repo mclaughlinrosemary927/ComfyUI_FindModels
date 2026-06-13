@@ -33,5 +33,12 @@
 .fm-download-progress {
   grid-column: 1 / -1; min-height: 16px; color: #8fd3a8; font-size: 12px;
 }
+.fm-download-jobs {
+  display: grid; gap: 6px; margin: 8px 0; padding: 9px;
+  border: 1px solid #555; border-radius: 6px; background: #202020;
+}
+.fm-download-job { display: flex; justify-content: space-between; gap: 10px; color: #8fd3a8; }
+.fm-download-job span:first-child { overflow-wrap: anywhere; }
+.fm-download-failed { color: #ff8c8c; }
 .fm-sources a { color: #7fb9ff; overflow-wrap: anywhere; }
 #find-models-panel button { padding: 5px 8px; color: #eee; background: #333; border: 1px solid #666; border-radius: 5px; cursor: pointer; }

@@ -331,6 +331,34 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(result["summary"]["missing"], 1)
         self.assertEqual(result["models"][0]["category"], "loras")
 
+    def test_official_missing_reference_wins_over_adaptable_duplicate(self):
+        payload = {
+            "nodes": [
+                {
+                    "id": 1,
+                    "type": "WanVideoModelLoader",
+                    "widgets": [{
+                        "name": "model",
+                        "value": "Wan/model.safetensors",
+                        "model_selector": True,
+                        "model_value_valid": False,
+                    }],
+                },
+                {
+                    "id": 2,
+                    "type": "WanVideoModelLoader",
+                    "widgets_values": ["Wan/model.safetensors"],
+                },
+            ]
+        }
+        result = analyze(
+            payload,
+            lambda category: ["Other/model.safetensors"] if category == "diffusion_models" else [],
+        )
+        self.assertEqual(result["summary"]["unresolved"], 1)
+        self.assertEqual(result["models"][0]["status"], "missing")
+        self.assertTrue(result["models"][0]["official_missing"])
+
 
 if __name__ == "__main__":
     unittest.main()
