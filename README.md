@@ -1,5 +1,7 @@
 # ComfyUI_FindModels
 
+Current version: `1.25.0`
+
 `ComfyUI_FindModels` scans the workflow currently open in ComfyUI, identifies model
 references that are missing locally, suggests compatible installed models, and finds
 candidate direct-download URLs from Civitai and Hugging Face.
