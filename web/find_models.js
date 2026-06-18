@@ -5,12 +5,48 @@ const EXTENSION = "ComfyUI.FindModels";
 let lastResult = null;
 let toolbarObserver = null;
 let downloadMonitor = null;
+let workflowMonitor = null;
+let activeTab = "models";
+let panelUserOpened = false;
+let lastWorkflowSignature = "";
+let scanRequestId = 0;
+let scanTimer = null;
+let enrichTimer = null;
+let observedWorkflowSignature = "";
+let nativeDockState = null;
+const resolvedNodePackages = new Set();
+const nodeActivities = new Map();
 const downloadStatuses = new Map();
+const confirmedModelSelections = new Map();
+const resolvedModels = new Set();
+
+function normalizedModelValue(value) {
+  return typeof value === "string" ? value.replaceAll("\\", "/").replace(/^\/+/, "") : "";
+}
+
+function modelSelectionKey(nodeId, widgetName) {
+  return `${String(nodeId)}:${String(widgetName || "")}`;
+}
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;",
   })[char]);
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(String(value));
+    return;
+  }
+  const input = document.createElement("textarea");
+  input.value = String(value);
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.appendChild(input);
+  input.select();
+  document.execCommand("copy");
+  input.remove();
 }
 
 function formatSize(value) {
@@ -31,9 +67,66 @@ function statusText(status) {
 function downloadProgressText(job) {
   const downloaded = formatSize(job.downloaded);
   const total = Number(job.total);
-  if (!Number.isFinite(total) || total <= 0) return `已下载 ${downloaded}`;
+  const details = [
+    job.speed ? `速度 ${formatSize(job.speed)}/s` : "",
+    job.elapsed ? `已耗时 ${formatDuration(job.elapsed)}` : "",
+    job.eta ? `预计剩余 ${formatDuration(job.eta)}` : "",
+  ].filter(Boolean).join(" · ");
+  if (!Number.isFinite(total) || total <= 0) return `已下载 ${downloaded}${details ? ` · ${details}` : ""}`;
   const percent = Math.min(100, Math.round((Number(job.downloaded || 0) / total) * 100));
-  return `已下载 ${downloaded} / ${formatSize(total)} · ${percent}%`;
+  return `已下载 ${downloaded} / ${formatSize(total)} · ${percent}%${details ? ` · ${details}` : ""}`;
+}
+
+function formatDuration(value) {
+  const seconds = Math.max(0, Math.round(Number(value) || 0));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  return hours ? `${hours}小时${minutes}分` : minutes ? `${minutes}分${rest}秒` : `${rest}秒`;
+}
+
+function downloadStatusText(job) {
+  if (job.status === "failed") return `失败：${job.error || "未知错误"}`;
+  if (job.status === "paused") return `已暂停 · ${downloadProgressText(job)}`;
+  if (job.status === "pausing") return `正在暂停 · ${downloadProgressText(job)}`;
+  if (job.status === "cancelled") return "已取消";
+  if (job.status === "completed") return `下载完成 · ${formatSize(job.total)}`;
+  if (job.status === "queued") return `等待下载 · ${downloadProgressText(job)}`;
+  return downloadProgressText(job);
+}
+
+function downloadControlsHtml(job) {
+  const pause = ["queued", "downloading"].includes(job.status)
+    ? `<button data-download-control="pause" data-job-id="${escapeHtml(job.id)}">暂停</button>` : "";
+  const resume = ["paused", "failed"].includes(job.status)
+    ? `<button data-download-control="resume" data-job-id="${escapeHtml(job.id)}">${job.status === "failed" ? "重试" : "继续"}</button>` : "";
+  const cancel = !["completed", "cancelled"].includes(job.status)
+    ? `<button data-download-control="cancel" data-job-id="${escapeHtml(job.id)}">取消</button>` : "";
+  return pause + resume + cancel;
+}
+
+function isExplicitModelWidget(name) {
+  const normalized = String(name || "").toLowerCase().replace(/[^a-z0-9_]+/g, "");
+  const exact = new Set([
+    "ckpt_name", "checkpoint_name", "lora_name", "vae_name", "control_net_name",
+    "controlnet_name", "clip_name", "clip_vision", "clip_vision_name", "text_encoder_name",
+    "unet_name", "diffusion_model", "diffusion_model_name", "upscale_model",
+    "upscale_model_name", "embedding_name",
+  ]);
+  return exact.has(normalized)
+    || /^(?:lora|lycoris)_?\d+$/.test(normalized)
+    || /^(?:ckpt|checkpoint|vae|controlnet|control_net|clip|clip_vision|text_encoder|unet|diffusion_model|upscale_model)_?\d+$/.test(normalized)
+    || /^(?:model|model_name)_\d+$/.test(normalized);
+}
+
+function isModelNodeType(type) {
+  const normalized = String(type || "").toLowerCase().replace(/[^a-z0-9_]+/g, "");
+  return [
+    "loader", "model", "instantid", "instant_id", "ipadapter", "ip_adapter",
+    "samloader", "sam_loader", "ultralytics", "detector",
+    "checkpoint", "lora", "vae", "controlnet", "clip", "textencode",
+    "text_encoder", "unet", "diffusion", "upscale", "embedding",
+  ].some((hint) => normalized.includes(hint));
 }
 
 function workflowSnapshot() {
@@ -43,20 +136,36 @@ function workflowSnapshot() {
   } catch (error) {
     console.debug("[ComfyUI_FindModels] Unable to serialize graph", error);
   }
-  return {
-    models: serializedGraph?.models || [],
-    nodes: app.graph?._nodes?.map((node) => {
+  const nodes = app.graph?._nodes?.map((node) => {
       let serialized = null;
       try {
         serialized = node.serialize?.();
       } catch (error) {
         console.debug("[ComfyUI_FindModels] Unable to serialize node", node.type, error);
       }
+      const widgetsValues = serialized?.widgets_values || [];
+      const selectedValues = new Set([
+        ...(Array.isArray(widgetsValues) ? widgetsValues : Object.values(widgetsValues)),
+        ...(node.widgets || []).map((widget) => widget.value),
+      ].filter((value) => typeof value === "string"));
+      const properties = serialized?.properties || node.properties || {};
+      const packageId = [properties.aux_id, properties.cnr_id, properties.package_id]
+        .find((value) => typeof value === "string" && value.trim());
+      const packageVersion = [properties.ver, properties.version]
+        .find((value) => typeof value === "string" && value.trim());
       return {
         id: node.id,
         type: node.type,
-        models: node.properties?.models || [],
-        widgets_values: serialized?.widgets_values || [],
+        package_id: packageId || null,
+        package_version: packageVersion || null,
+        active: ![2, 4].includes(node.mode),
+        frontend_registered: Boolean(
+          globalThis.LiteGraph?.registered_node_types?.[node.type]
+          || node.constructor?.type === node.type
+          || node.constructor?.nodeData?.name === node.type
+        ),
+        models: (node.properties?.models || []).filter((model) => selectedValues.has(model.name)),
+        widgets_values: widgetsValues,
         widgets: (node.widgets || []).flatMap((widget) => {
           let rawValues = widget.options?.values;
           if (typeof rawValues === "function") {
@@ -67,28 +176,96 @@ function workflowSnapshot() {
             }
           }
           const values = Array.isArray(rawValues) ? rawValues : [];
-          const isModelSelector = values.some((value) =>
-            typeof value === "string" && /\.(bin|ckpt|gguf|onnx|pt|pth|safetensors)$/i.test(value),
+          const hasModelOptions = values.some((value) =>
+            typeof value === "string" && /\.(bin|ckpt|gguf|onnx|pt|pth|safetensors|sft)$/i.test(value)
           );
-          const normalizedValue = typeof widget.value === "string"
-            ? widget.value.replaceAll("\\", "/")
-            : null;
-          const modelValueValid = isModelSelector && normalizedValue !== null
+          const isAsset = widget.type === "asset";
+          const isModelSelector = isAsset || hasModelOptions || isExplicitModelWidget(widget.name)
+            || (isModelNodeType(node.type) && typeof widget.value === "string"
+              && /\.(bin|ckpt|gguf|onnx|pt|pt2|pth|pkl|safetensors|sft)$/i.test(widget.value));
+          const normalizedValue = normalizedModelValue(widget.value) || null;
+          const selectionKey = modelSelectionKey(node.id, widget.name);
+          const confirmedValue = confirmedModelSelections.get(selectionKey);
+          if (confirmedValue && confirmedValue !== normalizedValue) {
+            confirmedModelSelections.delete(selectionKey);
+          }
+          const modelValueValid = confirmedValue === normalizedValue && normalizedValue !== null
+            ? true
+            : hasModelOptions && normalizedValue !== null
             ? values.some((value) =>
-              typeof value === "string" && value.replaceAll("\\", "/") === normalizedValue
+              typeof value === "string" && normalizedModelValue(value) === normalizedValue
             )
             : null;
+          const modelMetadata = (node.properties?.models || []).find((model) =>
+            typeof widget.value === "string" && model.name === widget.value
+          );
           return [{
             name: widget.name,
             type: widget.type,
             value: widget.value,
             model_selector: isModelSelector,
             model_value_valid: modelValueValid,
+            asset_selector: isAsset,
+            directory: modelMetadata?.directory,
+            source_url: modelMetadata?.url,
+            source_hash: modelMetadata?.hash,
+            source_hash_type: modelMetadata?.hash_type,
+            source_size: modelMetadata?.size,
           }];
         }),
       };
-    }) || [],
+    }) || [];
+  const referencedNames = new Set(nodes.filter((node) => node.active).flatMap((node) => [
+    ...(Array.isArray(node.widgets_values) ? node.widgets_values : Object.values(node.widgets_values || {})),
+    ...node.models.map((model) => model.name),
+  ]).filter((value) => typeof value === "string"));
+  return {
+    models: (serializedGraph?.models || []).filter((model) => referencedNames.has(model.name)),
+    nodes,
   };
+}
+
+function workflowSignature(snapshot) {
+  return JSON.stringify((snapshot.nodes || []).map((node) => [
+    node.id,
+    node.type,
+    node.active,
+    node.widgets_values,
+  ]));
+}
+
+function removeResolvedModel(name) {
+  if (!lastResult?.models) return;
+  const normalized = normalizedModelValue(name);
+  resolvedModels.add(normalized);
+  lastResult.models = lastResult.models.filter((model) => normalizedModelValue(model.name) !== normalized);
+  lastResult.summary = { ...lastResult.summary, unresolved: lastResult.models.length };
+  render(lastResult, true);
+  observedWorkflowSignature = workflowSignature(workflowSnapshot());
+}
+
+function scheduleScan(delay = 0, quick = true) {
+  window.clearTimeout(scanTimer);
+  scanTimer = window.setTimeout(() => scan(true, { quick }), delay);
+}
+
+function scheduleEnrichedScan(delay = 180) {
+  window.clearTimeout(enrichTimer);
+  enrichTimer = window.setTimeout(() => scan(true, { quick: false }), delay);
+}
+
+function startWorkflowMonitor() {
+  window.clearInterval(workflowMonitor);
+  observedWorkflowSignature = workflowSignature(workflowSnapshot());
+  workflowMonitor = window.setInterval(() => {
+    const signature = workflowSignature(workflowSnapshot());
+    if (signature === observedWorkflowSignature) return;
+    observedWorkflowSignature = signature;
+    resolvedModels.clear();
+    resolvedNodePackages.clear();
+    scanRequestId += 1;
+    scheduleScan(0, true);
+  }, 250);
 }
 
 async function post(path, body) {
@@ -107,13 +284,22 @@ async function get(path) {
   return response.json();
 }
 
-function downloadJobsHtml(jobs) {
-  if (!jobs.length) return "";
-  return `<section class="fm-download-jobs"><strong>模型下载任务</strong>${jobs.map((job) => `
+function downloadJobsHtml(jobs, nodeJobs = [...nodeActivities.values()]) {
+  if (!jobs.length && !nodeJobs.length) {
+    return '<div class="fm-empty"><strong>暂无下载任务</strong><span>模型下载与节点安装进度会统一显示在这里</span></div>';
+  }
+  const modelJobs = jobs.map((job) => `
     <div class="fm-download-job fm-download-${escapeHtml(job.status)}">
-      <span>${escapeHtml(job.filename)}</span>
-      <span>${escapeHtml(job.status === "failed" ? `失败：${job.error || "未知错误"}` : downloadProgressText(job))}</span>
-    </div>`).join("")}</section>`;
+      <span class="fm-job-kind">模型</span>
+      <div class="fm-download-job-info"><strong>${escapeHtml(job.filename)}</strong><span>${escapeHtml(downloadStatusText(job))}</span></div>
+      <div class="fm-download-controls">${downloadControlsHtml(job)}</div>
+    </div>`).join("");
+  const pluginJobs = nodeJobs.map((job) => `
+    <div class="fm-download-job fm-download-${escapeHtml(job.status)}">
+      <span class="fm-job-kind fm-job-node">节点</span>
+      <div class="fm-download-job-info"><strong>${escapeHtml(job.title)}</strong><span>${escapeHtml(job.message)}</span></div>
+    </div>`).join("");
+  return `<section class="fm-download-jobs">${modelJobs}${pluginJobs}</section>`;
 }
 
 async function refreshDownloadJobs() {
@@ -121,17 +307,27 @@ async function refreshDownloadJobs() {
   try {
     const { jobs = [] } = await get("/findmodels/download/jobs");
     panel.querySelector(".fm-downloads").innerHTML = downloadJobsHtml(jobs);
+    panel.querySelector('[data-tab-count="downloads"]').textContent =
+      jobs.filter((job) => !["completed", "cancelled"].includes(job.status)).length
+      + [...nodeActivities.values()].filter((job) => job.status === "downloading").length;
+    const sectionCount = panel.querySelector('[data-section-count="downloads"]');
+    if (sectionCount) sectionCount.textContent =
+      jobs.filter((job) => !["completed", "cancelled"].includes(job.status)).length
+      + [...nodeActivities.values()].filter((job) => job.status === "downloading").length;
     for (const job of jobs) {
       const previous = downloadStatuses.get(job.id);
       downloadStatuses.set(job.id, job.status);
       if (job.status === "completed" && previous && previous !== "completed") {
-        await applyMatch({
+        const model = lastResult?.models?.find((item) => item.name === job.original);
+        await applyMatchEverywhere(model || {
           node_id: job.node_id,
           widget: job.widget,
           name: job.original,
           match: { name: job.result?.relative_name },
         });
-        window.setTimeout(() => scan(true), 300);
+        removeResolvedModel(job.original);
+        scheduleScan(0, true);
+        scheduleEnrichedScan();
       }
     }
   } catch (error) {
@@ -162,6 +358,9 @@ async function applyMatch(model) {
   const previous = widget.value;
   try {
     node.graph?.beforeChange?.(node);
+    if (Array.isArray(widget.options?.values) && !widget.options.values.includes(model.match.name)) {
+      widget.options.values.push(model.match.name);
+    }
     widget.value = model.match.name;
     if (typeof widget.callback === "function") {
       await Promise.resolve(widget.callback(widget.value, app.canvas, node, [0, 0], {}));
@@ -171,7 +370,14 @@ async function applyMatch(model) {
     node.setDirtyCanvas?.(true, true);
     app.graph?.setDirtyCanvas?.(true, true);
     app.canvas?.setDirty?.(true, true);
-    return widget.value === model.match.name;
+    const applied = normalizedModelValue(widget.value) === normalizedModelValue(model.match.name);
+    if (applied) {
+      confirmedModelSelections.set(
+        modelSelectionKey(node.id, widget.name),
+        normalizedModelValue(widget.value),
+      );
+    }
+    return applied;
   } catch (error) {
     widget.value = previous;
     node.graph?.afterChange?.(node);
@@ -180,30 +386,212 @@ async function applyMatch(model) {
   }
 }
 
+async function applyMatchEverywhere(model) {
+  const references = model.referencing_nodes?.length
+    ? model.referencing_nodes
+    : [{ node_id: model.node_id, widget: model.widget, node_type: model.node_type }];
+  let applied = 0;
+  for (const reference of references) {
+    if (await applyMatch({ ...model, ...reference })) applied += 1;
+  }
+  return applied === references.length;
+}
+
+function locateNode(nodeId) {
+  const numericId = Number(nodeId);
+  const node = app.graph?.getNodeById?.(Number.isNaN(numericId) ? nodeId : numericId)
+    || app.graph?._nodes?.find((item) => String(item.id) === String(nodeId));
+  if (!node) return false;
+  app.canvas?.selectNode?.(node);
+  app.canvas?.centerOnNode?.(node);
+  node.setDirtyCanvas?.(true, true);
+  return true;
+}
+
 function sourceHtml(item, model) {
   const quark = item.quark ? escapeHtml(JSON.stringify(item.quark)) : "";
+  const downloadButton = item.downloadable !== false
+    ? `<button data-download="${escapeHtml(item.url || "")}" data-quark-download="${quark}"
+      data-filename="${escapeHtml(item.name)}"
+      data-size="${escapeHtml(item.size || "")}"
+      data-category="${escapeHtml(model.category)}" data-node-id="${escapeHtml(model.node_id)}"
+      data-widget="${escapeHtml(model.widget)}" data-original="${escapeHtml(model.name)}">下载到模型目录</button>`
+    : '<span class="fm-candidate-warning">相似候选，请打开核对</span>';
   return `<div class="fm-source">
     ${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">` : "<span>"}
       ${escapeHtml(item.provider)} · ${escapeHtml(item.name)} · ${formatSize(item.size)} · ${Math.round(item.confidence * 100)}%
     ${item.url ? "</a>" : "</span>"}
-    <button data-download="${escapeHtml(item.url || "")}" data-quark-download="${quark}"
-      data-filename="${escapeHtml(item.name)}"
-      data-size="${escapeHtml(item.size || "")}"
-      data-category="${escapeHtml(model.category)}" data-node-id="${escapeHtml(model.node_id)}"
-      data-widget="${escapeHtml(model.widget)}" data-original="${escapeHtml(model.name)}">下载到模型目录</button>
+    ${downloadButton}
     <div class="fm-download-progress" aria-live="polite"></div>
   </div>`;
 }
 
-function nodeCandidatesHtml(nodeType, candidates) {
+function officialSourceHtml(model) {
+  if (!model.source_url) return "";
+  return sourceHtml({
+    provider: "工作流内嵌来源",
+    name: model.name,
+    url: model.source_url,
+    size: model.size,
+    confidence: 1,
+  }, model);
+}
+
+function externalCandidatesHtml(model) {
+  const candidates = model.external_candidates || [];
+  if (!candidates.length) return "";
+  return `<div class="fm-external-candidates">${candidates.map((item) => `
+    <div class="fm-source fm-external-source">
+      <span>外部模型库 · ${escapeHtml(item.path)} · ${formatSize(item.size)}</span>
+      ${model.category === "unknown" ? '<span class="fm-target-warning">工作流未提供模型目录，不能自动剪切</span>' : `<button data-external-move="${escapeHtml(item.path)}"
+        data-name="${escapeHtml(model.name)}" data-category="${escapeHtml(model.category)}"
+        data-node-id="${escapeHtml(model.node_id)}" data-widget="${escapeHtml(model.widget)}">
+        剪切到模型目录
+      </button>`}
+    </div>`).join("")}</div>`;
+}
+
+function referenceText(model) {
+  const count = model.referencing_nodes?.length || (model.node_id ? 1 : 0);
+  return count ? `${count} 个引用节点` : "工作流模型元数据";
+}
+
+function modelCardHtml(model) {
+  try {
+    const confidence = Number(model.match?.confidence);
+    return `
+      <article class="fm-item fm-model-card fm-${escapeHtml(model.status || "missing")}">
+        <div class="fm-item-title"><span class="fm-status-icon">${model.status === "missing" ? "!" : "↻"}</span><strong title="${escapeHtml(model.name)}">${escapeHtml(model.name)}</strong><button class="fm-copy-name" data-copy-model-name="${escapeHtml(model.name)}" title="复制模型名称">⧉</button></div>
+        <div class="fm-meta"><span class="fm-badge">${escapeHtml(model.category || "unknown")}</span><span>${escapeHtml(model.official_missing ? "工作流总览判定缺失" : statusText(model.status))}</span><span>${referenceText(model)}</span><span data-model-size>大小：${formatSize(model.size)}</span></div>
+        ${model.match ? `<div class="fm-match">本地精确候选：${escapeHtml(model.match.name)} (${Number.isFinite(confidence) ? Math.round(confidence * 100) : 0}%)</div>` : ""}
+        ${externalCandidatesHtml(model)}
+        <div class="fm-sources">${officialSourceHtml(model)}</div>
+        <div class="fm-item-actions fm-model-actions">
+          ${model.node_id ? `<button data-locate-node="${escapeHtml(model.node_id)}">定位引用节点</button>` : ""}
+          ${model.match?.auto_apply ? `<button class="fm-local-load" data-apply="${escapeHtml(model.node_id)}:${escapeHtml(model.widget)}">加载本地模型</button>` : '<button class="fm-local-load" disabled title="本地尚未找到完全匹配的模型">加载本地模型</button>'}
+          <button data-source="${escapeHtml(model.name)}">查找下载来源</button>
+        </div>
+      </article>`;
+  } catch (error) {
+    console.error("[ComfyUI_FindModels] Failed to render missing model card", model, error);
+    return `
+      <article class="fm-item fm-model-card fm-missing">
+        <div class="fm-item-title"><span class="fm-status-icon">!</span><strong>${escapeHtml(model?.name || "未知缺失模型")}</strong></div>
+        <div class="fm-meta"><span class="fm-badge">${escapeHtml(model?.category || "unknown")}</span><span>模型详情渲染异常，但模型仍然缺失</span></div>
+      </article>`;
+  }
+}
+
+function nodeCandidatesHtml(nodeType, candidates, githubSearchUrl = "", packageId = "") {
     const links = candidates.map((item) => `
       <div class="fm-source">
         <a href="${escapeHtml(item.repo_url)}" target="_blank" rel="noopener noreferrer">
           ${escapeHtml(item.title)} · ${escapeHtml(item.author)} · ${Math.round(item.confidence * 100)}%
         </a>
-        <button data-node-install="${escapeHtml(item.id)}" data-node-type="${escapeHtml(nodeType)}">安装或更新插件</button>
+        <button data-node-install="${escapeHtml(item.id)}" data-node-type="${escapeHtml(nodeType)}"
+          data-package-id="${escapeHtml(packageId)}">安装或更新插件</button>
       </div>`).join("");
-    return links || "TE 官方市场没有精确匹配。";
+    const searchTerm = packageId || nodeType;
+    const searchUrl = githubSearchUrl || `https://github.com/search?q=${encodeURIComponent(`${searchTerm} ComfyUI`)}&type=repositories`;
+    return `${links || "<span>官方映射暂未找到精确插件，可使用工作流提供的 GitHub 仓库或自定义链接。</span>"}
+      <div class="fm-node-actions">
+        <button data-node-refresh="${escapeHtml(nodeType)}" data-package-id="${escapeHtml(packageId)}">重新查找插件</button>
+        <a href="${escapeHtml(searchUrl)}" target="_blank" rel="noopener noreferrer">GitHub 搜索</a>
+      </div>`;
+}
+
+function setActiveTab(panel, tab) {
+  activeTab = tab;
+  panel.querySelectorAll("[data-tab]").forEach((button) =>
+    button.classList.toggle("active", button.dataset.tab === tab)
+  );
+  panel.querySelectorAll("[data-tab-panel]").forEach((content) =>
+    content.classList.toggle("active", content.dataset.tabPanel === tab)
+  );
+  panel.scrollTop = 0;
+}
+
+function installDependenciesEnabled(panel) {
+  return panel.querySelector("[data-install-dependencies]")?.checked !== false;
+}
+
+async function waitForPropertiesPanel() {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const properties = document.querySelector("[data-testid='properties-panel']");
+    if (properties) return properties;
+    await new Promise((resolve) => window.setTimeout(resolve, 25));
+  }
+  return null;
+}
+
+async function openDockedPanel(panel) {
+  if (nativeDockState && panel.classList.contains("native-docked")) return true;
+  let properties = document.querySelector("[data-testid='properties-panel']");
+  const wasOpen = Boolean(properties);
+  let openedByUs = false;
+  if (!properties) {
+    const toggle = findPropertyPanelButton();
+    if (toggle) {
+      toggle.click();
+      openedByUs = true;
+      properties = await waitForPropertiesPanel();
+    }
+  }
+  if (!properties?.parentElement) {
+    panel.classList.remove("native-docked");
+    panel.classList.add("open");
+    return false;
+  }
+  const host = properties.parentElement;
+  nativeDockState = {
+    properties,
+    host,
+    openedByUs,
+    wasOpen,
+    previousDisplay: properties.style.display,
+  };
+  properties.style.display = "none";
+  properties.setAttribute("aria-hidden", "true");
+  host.appendChild(panel);
+  panel.classList.add("native-docked", "open");
+  return true;
+}
+
+function closeDockedPanel(panel) {
+  panel.classList.remove("open", "native-docked");
+  document.body.appendChild(panel);
+  const state = nativeDockState;
+  nativeDockState = null;
+  if (!state) return;
+  state.properties.style.display = state.previousDisplay;
+  state.properties.removeAttribute("aria-hidden");
+  if (state.openedByUs && !state.wasOpen) {
+    window.requestAnimationFrame(() => findPropertyPanelButton()?.click());
+  }
+}
+
+function enablePanelResize(panel) {
+  const handle = panel.querySelector(".fm-resize-handle");
+  if (!handle || handle.dataset.ready) return;
+  handle.dataset.ready = "true";
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = panel.getBoundingClientRect().width;
+    const move = (current) => {
+      if (panel.classList.contains("native-docked")) return;
+      const width = Math.max(420, Math.min(window.innerWidth - 24, startWidth + startX - current.clientX));
+      panel.style.width = `${width}px`;
+      localStorage.setItem("findmodels.panelWidth", String(width));
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  });
 }
 
 function ensurePanel() {
@@ -212,15 +600,193 @@ function ensurePanel() {
   panel = document.createElement("section");
   panel.id = "find-models-panel";
   panel.innerHTML = `
-    <div class="fm-header"><strong>查找模型</strong><button data-action="close">×</button></div>
-    <div class="fm-actions">
-      <button data-action="scan">扫描当前工作流</button>
-      <button data-action="adapt">一键加载模型</button>
+    <div class="fm-header">
+      <div class="fm-resize-handle" title="拖动调整宽度"></div>
+      <div class="fm-header-copy"><strong>查找缺失模型和节点</strong><span>当前工作流缺失依赖管理</span></div>
+      <div class="fm-window-actions"><button data-action="scan" title="扫描当前工作流">↻</button><button data-action="close" title="关闭">×</button></div>
     </div>
-    <div class="fm-summary">尚未扫描</div><div class="fm-downloads"></div><div class="fm-list"></div>`;
+    <div class="fm-scan-state"><span class="fm-scan-dot"></span><span data-scan-status>等待扫描当前工作流</span><button data-action="scan">重新扫描</button></div>
+    <nav class="fm-tabs">
+      <button data-tab="models"><span class="fm-tab-icon">缺</span><strong class="fm-tab-label">缺失模型</strong><b data-tab-count="models">0</b></button>
+      <button data-tab="nodes"><span class="fm-tab-icon">节</span><strong class="fm-tab-label">缺失节点</strong><b data-tab-count="nodes">0</b></button>
+      <button data-tab="downloads"><span class="fm-tab-icon">↓</span><strong class="fm-tab-label">下载任务</strong><b data-tab-count="downloads">0</b></button>
+      <button data-tab="settings"><span class="fm-tab-icon">设</span><strong class="fm-tab-label">设置</strong></button>
+    </nav>
+    <div class="fm-summary" aria-live="polite">尚未扫描</div>
+    <div class="fm-tab-panel" data-tab-panel="models">
+      <div class="fm-section-toolbar"><div><strong>缺失模型 <em data-section-count="models">0</em></strong><span>仅显示尚未加载的模型，解决后立即移出</span></div><div><button data-action="scan">↻ 扫描当前工作流</button><button class="fm-primary" data-action="adapt">⇧ 一键加载模型</button></div></div>
+      <div class="fm-model-list"></div>
+    </div>
+    <div class="fm-tab-panel" data-tab-panel="nodes">
+      <div class="fm-section-toolbar"><div><strong>缺失节点 <em data-section-count="nodes">0</em></strong><span>仅显示当前工作流尚未安装的节点包</span></div><div><button data-action="scan">↻ 扫描当前工作流</button><button class="fm-primary" data-action="install-missing-nodes">↓ 安装缺失节点</button></div></div>
+      <div class="fm-node-install-options">
+        <label><input data-install-dependencies type="checkbox" checked> 自动安装插件依赖 requirements.txt</label>
+        <div><input data-custom-github type="url" placeholder="输入自定义 GitHub 插件仓库链接"><button data-action="install-custom-github">链接安装插件</button></div>
+      </div>
+      <div class="fm-node-list"></div>
+    </div>
+    <div class="fm-tab-panel" data-tab-panel="downloads">
+      <div class="fm-section-toolbar"><div><strong>下载任务 <em data-section-count="downloads">0</em></strong><span>模型下载与节点安装任务统一显示</span></div><div><button data-action="refresh-downloads">↻ 刷新任务</button></div></div>
+      <div class="fm-downloads"></div>
+    </div>
+    <div class="fm-tab-panel" data-tab-panel="settings">
+      <div class="fm-section-toolbar"><div><strong>设置</strong><span>配置外部模型库与夸克网盘下载能力</span></div></div>
+      <div class="fm-settings-card"><strong>外部模型库</strong><span>指定本机外部模型目录，只精确匹配当前工作流缺失的模型文件名。</span>
+        <div class="fm-external-config">
+          <input data-external-folder type="text" placeholder="请选择外部模型库文件夹" readonly>
+          <button data-action="select-external-folder">选择文件夹</button>
+        </div>
+      </div>
+    </div>`;
   document.body.appendChild(panel);
-  panel.querySelector('[data-action="close"]').onclick = () => panel.classList.remove("open");
-  panel.querySelector('[data-action="scan"]').onclick = () => scan(false);
+  const savedWidth = Number(localStorage.getItem("findmodels.panelWidth"));
+  if (Number.isFinite(savedWidth) && savedWidth >= 420) panel.style.width = `${savedWidth}px`;
+  enablePanelResize(panel);
+  panel.querySelector('[data-tab-panel="settings"]')?.insertAdjacentHTML("beforeend", `
+    <div class="fm-settings-card"><strong>夸克链接</strong><span>查找下载来源时后台精确搜索以下模型库；公开分享大文件受限时会优先回退到可验证的快速直链。</span>
+      <div class="fm-quark-links"><a href="https://pan.quark.cn/s/fb913d649b18" target="_blank" rel="noopener noreferrer">https://pan.quark.cn/s/fb913d649b18</a><a href="https://pan.quark.cn/s/4680ac866516" target="_blank" rel="noopener noreferrer">https://pan.quark.cn/s/4680ac866516</a></div>
+      <div class="fm-quark-auth-config">
+        <input data-quark-cookie type="password" placeholder="可选：夸克登录 Cookie（仅保存在本机）">
+        <button data-action="save-quark-cookie">保存</button>
+        <button data-action="clear-quark-cookie">清除</button>
+      </div>
+      <span data-quark-auth-status>正在检查夸克登录态...</span>
+    </div>`);
+  get("/findmodels/quark-auth").then((result) => {
+    const status = panel.querySelector("[data-quark-auth-status]");
+    if (status) status.textContent = result.configured ? "已保存夸克登录态，可重试直链下载。" : "未保存夸克登录态，公开分享大文件可能被夸克限制。";
+  }).catch(() => {});
+  panel.querySelectorAll("[data-tab]").forEach((button) => {
+    button.onclick = () => setActiveTab(panel, button.dataset.tab);
+  });
+  setActiveTab(panel, activeTab);
+  panel.querySelector('[data-action="close"]').onclick = () => {
+    panelUserOpened = false;
+    closeDockedPanel(panel);
+  };
+  panel.querySelectorAll('[data-action="scan"]').forEach((button) => {
+    button.onclick = () => scheduleScan(0, true);
+  });
+  panel.querySelector('[data-action="refresh-downloads"]').onclick = () => refreshDownloadJobs();
+  panel.querySelector('[data-action="install-missing-nodes"]').onclick = async () => {
+    const button = panel.querySelector('[data-action="install-missing-nodes"]');
+    button.disabled = true;
+    let installed = 0;
+    const failures = [];
+    const packages = lastResult?.missing_node_packages || [];
+    for (const nodePackage of packages) {
+      const nodeType = nodePackage.node_types?.[0] || "";
+      const packageId = nodePackage.known ? nodePackage.id : "";
+      const activityId = packageId || nodeType;
+      nodeActivities.set(activityId, { title: nodePackage.title, status: "downloading", message: "正在查找可信插件来源…" });
+      await refreshDownloadJobs();
+      button.textContent = `正在查找 ${nodePackage.title}…`;
+      try {
+        const found = await post("/findnodes/candidates", { node_type: nodeType, package_id: packageId });
+        const candidate = (found.candidates || []).find((item) => [
+          "workflow_package_id",
+          "workflow_package_github",
+          "official_node_mapping",
+          "comfy_manager_node_mapping",
+          "comfy_manager_github",
+        ].includes(item.reason));
+        if (!candidate) throw new Error("没有找到由工作流 aux_id 或 ComfyUI-Manager 官方映射确认的 GitHub 仓库");
+        button.textContent = `正在安装 ${nodePackage.title}…`;
+        nodeActivities.set(activityId, { title: nodePackage.title, status: "downloading", message: "正在检查依赖并安装…" });
+        await refreshDownloadJobs();
+        await post("/findnodes/install", {
+          node_type: nodeType,
+          package_id: packageId,
+          plugin_id: candidate.id,
+          install_dependencies: installDependenciesEnabled(panel),
+        });
+        resolvedNodePackages.add(activityId);
+        nodeActivities.set(activityId, { title: nodePackage.title, status: "completed", message: "安装完成，重启 ComfyUI 后生效" });
+        installed += 1;
+      } catch (error) {
+        nodeActivities.set(activityId, { title: nodePackage.title, status: "failed", message: `安装失败：${error.message}` });
+        failures.push(`${nodePackage.title}: ${error.message}`);
+      }
+      await refreshDownloadJobs();
+    }
+    button.disabled = false;
+    button.textContent = "安装缺失节点";
+    panel.querySelector(".fm-summary").textContent =
+      `已安装或更新 ${installed} 个精确匹配插件。${failures.length ? `失败 ${failures.length} 个：${failures.join("；")}` : "请重启 ComfyUI。"}`
+    if (installed) {
+      render(lastResult, true);
+      scheduleScan(0, true);
+    }
+  };
+  panel.querySelector('[data-action="select-external-folder"]').onclick = async () => {
+    const button = panel.querySelector('[data-action="select-external-folder"]');
+    const input = panel.querySelector("[data-external-folder]");
+    button.disabled = true;
+    button.textContent = "等待选择…";
+    try {
+      const result = await post("/findmodels/external-folder/select", {});
+      if (!result.cancelled) {
+        input.value = result.path;
+        scheduleScan(0, true);
+        scheduleEnrichedScan();
+      }
+    } catch (error) {
+      panel.querySelector(".fm-summary").textContent = `选择外部模型库失败：${error.message}`;
+    } finally {
+      button.disabled = false;
+      button.textContent = "选择文件夹";
+    }
+  };
+  panel.querySelector('[data-action="install-custom-github"]').onclick = async () => {
+    const button = panel.querySelector('[data-action="install-custom-github"]');
+    const input = panel.querySelector("[data-custom-github]");
+    const nodePackage = lastResult?.missing_node_packages?.[0];
+    const nodeType = nodePackage?.node_types?.[0] || "CustomNode";
+    if (!input.value.trim()) {
+      panel.querySelector(".fm-summary").textContent = "请输入完整的 GitHub 插件仓库链接。";
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "正在安装…";
+    try {
+      const result = await post("/findnodes/install", {
+        node_type: nodeType,
+        package_id: nodePackage?.known ? nodePackage.id : "custom-github",
+        repo_url: input.value.trim(),
+        install_dependencies: installDependenciesEnabled(panel),
+      });
+      input.value = "";
+      panel.querySelector(".fm-summary").textContent = `${result.title} 已安装，请重启 ComfyUI。`;
+      await refreshDownloadJobs();
+    } catch (error) {
+      panel.querySelector(".fm-summary").textContent = `GitHub 插件安装失败：${error.message}`;
+    } finally {
+      button.disabled = false;
+      button.textContent = "链接安装插件";
+    }
+  };
+  panel.querySelector('[data-action="save-quark-cookie"]').onclick = async () => {
+    const input = panel.querySelector("[data-quark-cookie]");
+    const status = panel.querySelector("[data-quark-auth-status]");
+    try {
+      const result = await post("/findmodels/quark-auth", { cookie: input.value });
+      input.value = "";
+      status.textContent = result.configured ? "已保存夸克登录态，可重试直链下载。" : "Cookie 为空，未保存登录态。";
+    } catch (error) {
+      status.textContent = `保存夸克登录态失败：${error.message}`;
+    }
+  };
+  panel.querySelector('[data-action="clear-quark-cookie"]').onclick = async () => {
+    const input = panel.querySelector("[data-quark-cookie]");
+    const status = panel.querySelector("[data-quark-auth-status]");
+    try {
+      await post("/findmodels/quark-auth", { cookie: "" });
+      input.value = "";
+      status.textContent = "已清除夸克登录态。";
+    } catch (error) {
+      status.textContent = `清除夸克登录态失败：${error.message}`;
+    }
+  };
   panel.querySelector('[data-action="adapt"]').onclick = async () => {
     const button = panel.querySelector('[data-action="adapt"]');
     button.disabled = true;
@@ -228,15 +794,114 @@ function ensurePanel() {
     let failed = 0;
     for (const model of lastResult?.models || []) {
       if (!model.match?.auto_apply) continue;
-      if (await applyMatch(model)) count += 1;
+      if (await applyMatchEverywhere(model)) count += 1;
       else failed += 1;
     }
     panel.querySelector(".fm-summary").textContent =
       `已加载 ${count} 个模型${failed ? `，${failed} 个加载失败` : ""}。请检查节点后保存工作流。`;
     button.disabled = false;
-    if (count) window.setTimeout(() => scan(false), 100);
+    if (count) {
+      for (const model of [...(lastResult?.models || [])]) {
+        if (model.match?.auto_apply) removeResolvedModel(model.name);
+      }
+      scheduleScan(0, true);
+    }
   };
   panel.addEventListener("click", async (event) => {
+    const copyButton = event.target.closest("[data-copy-model-name]");
+    if (copyButton) {
+      try {
+        await copyText(copyButton.dataset.copyModelName);
+        const original = copyButton.textContent;
+        copyButton.textContent = "已复制";
+        window.setTimeout(() => { copyButton.textContent = original; }, 1200);
+      } catch (error) {
+        panel.querySelector(".fm-summary").textContent = `复制模型名称失败：${error.message}`;
+      }
+      return;
+    }
+
+    const locateButton = event.target.closest("[data-locate-node]");
+    if (locateButton) {
+      if (!locateNode(locateButton.dataset.locateNode)) {
+        panel.querySelector(".fm-summary").textContent = "无法定位节点，节点可能已被删除。";
+      }
+      return;
+    }
+
+    const controlButton = event.target.closest("[data-download-control]");
+    if (controlButton) {
+      controlButton.disabled = true;
+      try {
+        await post(`/findmodels/download/${controlButton.dataset.downloadControl}`, {
+          job_id: controlButton.dataset.jobId,
+        });
+        await refreshDownloadJobs();
+      } catch (error) {
+        panel.querySelector(".fm-summary").textContent = `下载任务操作失败：${error.message}`;
+        controlButton.disabled = false;
+      }
+      return;
+    }
+
+    const nodeRefreshButton = event.target.closest("[data-node-refresh]");
+    if (nodeRefreshButton) {
+      nodeRefreshButton.disabled = true;
+      nodeRefreshButton.textContent = "正在查找…";
+      const target = nodeRefreshButton.closest(".fm-item").querySelector(".fm-node-candidates");
+      try {
+        const data = await post("/findnodes/candidates", {
+          node_type: nodeRefreshButton.dataset.nodeRefresh,
+          package_id: nodeRefreshButton.dataset.packageId,
+        });
+        target.innerHTML = nodeCandidatesHtml(
+          data.node_type,
+          data.candidates || [],
+          data.github_search_url,
+          data.package_id,
+        );
+      } catch (error) {
+        nodeRefreshButton.disabled = false;
+        nodeRefreshButton.textContent = "重新查找插件";
+        panel.querySelector(".fm-summary").textContent = `查找缺失节点插件失败：${error.message}`;
+      }
+      return;
+    }
+
+    const moveButton = event.target.closest("[data-external-move]");
+    if (moveButton) {
+      moveButton.disabled = true;
+      moveButton.textContent = "正在剪切…";
+      try {
+        const moved = await post("/findmodels/external-move", {
+          source: moveButton.dataset.externalMove,
+          name: moveButton.dataset.name,
+          category: moveButton.dataset.category,
+        });
+        const model = (lastResult?.models || []).find((item) => item.name === moveButton.dataset.name);
+        const references = model?.referencing_nodes?.length
+          ? model.referencing_nodes
+          : [{ node_id: moveButton.dataset.nodeId, widget: moveButton.dataset.widget }];
+        for (const reference of references) {
+          await applyMatch({
+            ...reference,
+            name: moveButton.dataset.name,
+            match: { name: moved.relative_name },
+          });
+        }
+        removeResolvedModel(moveButton.dataset.name);
+        panel.querySelector(".fm-summary").textContent =
+          `已剪切 ${moved.relative_name} 到 ${moved.category} 模型目录。`;
+        scheduleScan(0, true);
+        scheduleEnrichedScan();
+      } catch (error) {
+        moveButton.disabled = false;
+        moveButton.textContent = "剪切失败，重试";
+        panel.querySelector(".fm-summary").textContent = `剪切模型失败：${error.message}`;
+      }
+      return;
+    }
+
     const installButton = event.target.closest("[data-node-install]");
     if (installButton) {
       installButton.disabled = true;
@@ -244,13 +909,25 @@ function ensurePanel() {
       try {
         const result = await post("/findnodes/install", {
           node_type: installButton.dataset.nodeType,
+          package_id: installButton.dataset.packageId,
           plugin_id: installButton.dataset.nodeInstall,
+          install_dependencies: installDependenciesEnabled(panel),
+        });
+        const activityId = installButton.dataset.packageId || installButton.dataset.nodeType;
+        resolvedNodePackages.add(activityId);
+        nodeActivities.set(activityId, {
+          title: result.title,
+          status: "completed",
+          message: "安装完成，重启 ComfyUI 后生效",
         });
         installButton.textContent = result.action === "updated" ? "更新完成，需重启" : "安装完成，需重启";
         panel.querySelector(".fm-summary").textContent =
           `${result.title} 已${result.action === "updated" ? "更新" : "安装"}；`
           + `${result.new_conflicts?.length ? `发现 ${result.new_conflicts.length} 个新增依赖冲突，请查看终端。` : "未发现新增依赖冲突。"}`
           + "请重启 ComfyUI。";
+        await refreshDownloadJobs();
+        render(lastResult, true);
+        scheduleScan(0, true);
       } catch (error) {
         installButton.disabled = false;
         installButton.textContent = "安装失败，重试";
@@ -270,13 +947,23 @@ function ensurePanel() {
           name: sourceButton.dataset.source,
           category: model.category,
         });
+        if (data.size) {
+          model.size = data.size;
+          const sizeLabel = sourceButton.closest(".fm-item").querySelector("[data-model-size]");
+          if (sizeLabel) sizeLabel.textContent = `大小：${formatSize(data.size)}`;
+        }
         const links = data.candidates.map((item) => sourceHtml(item, model)).join("");
-        target.innerHTML = links || "<span>未找到文件名完全一致的可下载模型</span>";
+        const searches = data.search_urls
+          ? `<div class="fm-node-actions"><a href="${escapeHtml(data.search_urls.huggingface)}" target="_blank" rel="noopener noreferrer">Hugging Face 搜索</a><a href="${escapeHtml(data.search_urls.civitai)}" target="_blank" rel="noopener noreferrer">Civitai 搜索</a></div>`
+          : "";
+        target.innerHTML = links
+          ? `${data.exact_count ? "" : '<span class="fm-candidate-warning">未找到完全同名文件，以下为高置信相似候选，需人工核对。</span>'}${links}${searches}`
+          : `<span>未找到完全同名或高置信候选。</span>${searches}`;
       } catch (error) {
         target.textContent = `获取下载项失败：${error.message}`;
       } finally {
         sourceButton.disabled = false;
-        sourceButton.textContent = "下载缺失模型";
+        sourceButton.textContent = "查找下载来源";
       }
       return;
     }
@@ -310,43 +997,82 @@ function ensurePanel() {
 
 function render(result, quiet) {
   const panel = ensurePanel();
+  result.models = (result.models || []).filter((model) => !resolvedModels.has(normalizedModelValue(model.name)));
+  result.summary = { ...result.summary, unresolved: result.models.length };
   lastResult = result;
   const summary = result.summary;
   const missingNodes = result.missing_nodes || [];
+  const missingNodePackages = (result.missing_node_packages || []).filter((nodePackage) => {
+    const nodeType = nodePackage.node_types?.[0] || "";
+    return !resolvedNodePackages.has(nodePackage.id) && !resolvedNodePackages.has(nodeType);
+  });
   const missingNodeCandidates = result.missing_node_candidates || {};
-  updateToolbarButton(summary.unresolved + missingNodes.length);
-  panel.querySelector(".fm-summary").textContent =
-    `缺失节点：${missingNodes.length}；未加载模型：${summary.unresolved}`;
-  const nodeHtml = missingNodes.map((nodeType) => `
+  updateToolbarButton(summary.unresolved + missingNodePackages.length);
+  panel.querySelector('[data-tab-count="models"]').textContent = summary.unresolved;
+  panel.querySelector('[data-tab-count="nodes"]').textContent = missingNodePackages.length;
+  panel.querySelector('[data-section-count="models"]').textContent = summary.unresolved;
+  panel.querySelector('[data-section-count="nodes"]').textContent = missingNodePackages.length;
+  const scanStatus = panel.querySelector("[data-scan-status]");
+  if (scanStatus) {
+    scanStatus.textContent = result.quick
+      ? "已快速识别，正在补充外部模型库候选…"
+      : "当前工作流扫描完成";
+  }
+  const externalInput = panel.querySelector("[data-external-folder]");
+  if (externalInput && document.activeElement !== externalInput) {
+    externalInput.value = result.external_folder || "";
+  }
+  panel.querySelector(".fm-summary").innerHTML =
+    `<span class="fm-summary-ok">✓</span><span>当前页面仅显示尚未解决的依赖项</span>`;
+  const nodeHtml = missingNodePackages.map((nodePackage) => {
+    const nodeType = nodePackage.node_types?.[0] || "";
+    const nodeIds = nodePackage.node_ids || [];
+    return `
     <article class="fm-item fm-missing">
-      <div><strong>${escapeHtml(nodeType)}</strong><span>缺失节点</span></div>
-      <div class="fm-node-candidates">${nodeCandidatesHtml(nodeType, missingNodeCandidates[nodeType] || [])}</div>
-    </article>`).join("");
-  panel.querySelector(".fm-list").innerHTML = nodeHtml + result.models.map((model) => `
-    <article class="fm-item fm-${escapeHtml(model.status)}">
-      <div><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.category)} · ${escapeHtml(model.official_missing ? "官方判定缺失" : statusText(model.status))}</span></div>
-      ${model.match ? `<div class="fm-match">本地候选：${escapeHtml(model.match.name)} (${Math.round(model.match.confidence * 100)}%) ${model.match.auto_apply ? `<button data-apply="${escapeHtml(model.node_id)}:${escapeHtml(model.widget)}">加载</button>` : ""}</div>` : ""}
-      ${model.status === "missing" ? `<button data-source="${escapeHtml(model.name)}">下载缺失模型</button><div class="fm-sources"></div>` : ""}
-    </article>`).join("") || "<p>当前工作流中未发现缺失节点或模型。</p>";
+      <div class="fm-item-title"><span class="fm-status-icon">!</span><strong>${escapeHtml(nodePackage.title)}</strong><span class="fm-badge">${nodePackage.known ? "缺失节点包" : "未知包"}</span></div>
+      <div class="fm-meta"><span>${nodePackage.count} 个节点</span>${nodePackage.version ? `<span>${escapeHtml(nodePackage.version)}</span>` : ""}</div>
+      <div class="fm-node-types">${(nodePackage.node_types || []).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>
+      ${nodeIds[0] ? `<div class="fm-item-actions"><button data-locate-node="${escapeHtml(nodeIds[0])}">定位节点</button></div>` : ""}
+      <div class="fm-node-candidates">${nodeCandidatesHtml(nodeType, missingNodeCandidates[nodeType] || [], "", nodePackage.known ? nodePackage.id : "")}</div>
+    </article>`;
+  }).join("");
+  const modelsHtml = (result.models || []).map(modelCardHtml).join("");
+  panel.querySelector(".fm-model-list").innerHTML = modelsHtml
+    ? `<div class="fm-table-head fm-model-head"><span>文件名</span><span>类型 / 引用 / 本地候选</span><span>操作</span></div>${modelsHtml}<div class="fm-table-foot">共 ${result.models.length} 项</div>`
+    : '<div class="fm-empty"><strong>未发现缺失模型</strong><span>当前工作流模型已就绪</span></div>';
+  panel.querySelector(".fm-node-list").innerHTML = nodeHtml
+    ? `<div class="fm-table-head fm-node-head"><span>包名（节点集）</span><span>引用 / 来源</span><span>操作</span></div>${nodeHtml}<div class="fm-table-foot">共 ${missingNodePackages.length} 项</div>`
+    : '<div class="fm-empty"><strong>未发现缺失节点</strong><span>当前工作流节点均已注册</span></div>';
   panel.querySelectorAll("[data-apply]").forEach((button) => {
     button.onclick = async () => {
       const model = result.models.find((item) => `${item.node_id}:${item.widget}` === button.dataset.apply);
-      if (model && await applyMatch(model)) window.setTimeout(() => scan(false), 100);
+      if (model && await applyMatchEverywhere(model)) {
+        removeResolvedModel(model.name);
+        scheduleScan(0, true);
+      }
     };
   });
-  if (!quiet) panel.classList.add("open");
 }
 
-async function scan(quiet = false) {
+async function scan(quiet = false, { quick = false } = {}) {
   const panel = ensurePanel();
+  const snapshot = workflowSnapshot();
+  const signature = workflowSignature(snapshot);
+  const requestId = ++scanRequestId;
   updateToolbarButton(null, "扫描中");
-  panel.querySelector(".fm-summary").textContent = "正在扫描…";
+  const scanStatus = panel.querySelector("[data-scan-status]");
+  if (scanStatus) scanStatus.textContent = quick ? "正在快速识别当前工作流…" : "正在补充外部模型库候选…";
+  if (!quiet && !lastResult) panel.querySelector(".fm-summary").textContent = "正在扫描…";
   try {
-    render(await post("/findmodels/scan", workflowSnapshot()), quiet);
+    const result = await post("/findmodels/scan", { ...snapshot, quick });
+    if (requestId !== scanRequestId || signature !== workflowSignature(workflowSnapshot())) return;
+    lastWorkflowSignature = signature;
+    render(result, quiet);
+    if (quick) scheduleEnrichedScan();
   } catch (error) {
+    if (requestId !== scanRequestId) return;
     updateToolbarButton(null, "扫描失败");
-    if (!quiet) panel.classList.add("open");
-    panel.querySelector(".fm-summary").textContent = `扫描失败：${error.message}`;
+    if (scanStatus) scanStatus.textContent = `扫描失败：${error.message}`;
   }
 }
 
@@ -371,27 +1097,33 @@ function findRunButton() {
   return selectors.map((selector) => document.querySelector(selector)).find(Boolean);
 }
 
-function findImageStreamButton() {
+function findPropertyPanelButton() {
   const selectors = [
-    "[data-testid='image-feed-button']",
-    "[data-testid='image-stream-button']",
-    "button[aria-label='显示图像流']",
-    "button[title='显示图像流']",
-    "button[aria-label*='图像流']",
-    "button[title*='图像流']",
-    "button[aria-label*='image feed']",
-    "button[title*='image feed']",
+    "button[aria-label='开关属性面板']",
+    "button[title='开关属性面板']",
+    "button[aria-label*='属性面板']",
+    "button[title*='属性面板']",
+    "button[aria-label*='Toggle property panel']",
+    "button[title*='Toggle property panel']",
   ];
   const direct = selectors.map((selector) => document.querySelector(selector)).find(Boolean);
   if (direct) return direct;
   return [...document.querySelectorAll("button")].find((button) =>
-    ["显示图像流", "Show image feed", "Show image stream"].includes(button.textContent?.trim()),
+    ["开关属性面板", "Toggle property panel"].includes(button.textContent?.trim()),
+  );
+}
+
+function findActiveTasksButton() {
+  return [...document.querySelectorAll("button")].find((button) =>
+    /(?:\d+\s*个活动任务|\d+\s*active tasks?)/i.test(button.textContent?.trim() || ""),
   );
 }
 
 function findTopToolbar() {
-  const imageStreamButton = findImageStreamButton();
-  if (imageStreamButton?.parentElement) return imageStreamButton.parentElement;
+  const propertyButton = findPropertyPanelButton();
+  if (propertyButton?.parentElement) return propertyButton.parentElement;
+  const activeTasksButton = findActiveTasksButton();
+  if (activeTasksButton?.parentElement) return activeTasksButton.parentElement;
   const runButton = findRunButton();
   if (runButton?.parentElement) return runButton.parentElement;
   return document.querySelector(
@@ -401,7 +1133,8 @@ function findTopToolbar() {
 
 function mountToolbarButton() {
   let existing = document.getElementById("find-models-launcher");
-  const imageStreamButton = findImageStreamButton();
+  const propertyButton = findPropertyPanelButton();
+  const activeTasksButton = findActiveTasksButton();
   const runButton = findRunButton();
   const toolbar = findTopToolbar();
 
@@ -411,18 +1144,30 @@ function mountToolbarButton() {
     existing.type = "button";
     existing.textContent = "查找模型";
     existing.title = "扫描当前工作流中的缺失模型";
-    existing.onclick = () => scan(false);
     document.body.appendChild(existing);
   }
+  existing.onclick = async () => {
+    panelUserOpened = true;
+    const panel = ensurePanel();
+    if (panel.classList.contains("open")) {
+      scan(true, { quick: true });
+      return;
+    }
+    await openDockedPanel(panel);
+    scan(true, { quick: true });
+  };
 
   if (toolbar) {
     existing.classList.remove("toolbar-fallback");
     if (existing.parentElement !== toolbar) {
-      if (imageStreamButton) imageStreamButton.insertAdjacentElement("beforebegin", existing);
+      if (propertyButton) propertyButton.insertAdjacentElement("beforebegin", existing);
+      else if (activeTasksButton) activeTasksButton.insertAdjacentElement("afterend", existing);
       else if (runButton) runButton.insertAdjacentElement("afterend", existing);
       else toolbar.appendChild(existing);
-    } else if (imageStreamButton && existing.nextElementSibling !== imageStreamButton) {
-      imageStreamButton.insertAdjacentElement("beforebegin", existing);
+    } else if (propertyButton && existing.nextElementSibling !== propertyButton) {
+      propertyButton.insertAdjacentElement("beforebegin", existing);
+    } else if (!propertyButton && activeTasksButton && activeTasksButton.nextElementSibling !== existing) {
+      activeTasksButton.insertAdjacentElement("afterend", existing);
     }
     return true;
   }
@@ -447,12 +1192,18 @@ app.registerExtension({
     style.href = new URL("./find_models.css", import.meta.url).href;
     document.head.appendChild(style);
     ensurePanel();
+    panelUserOpened = false;
+    ensurePanel().classList.remove("open");
     watchTopToolbar();
     startDownloadMonitor();
-    window.setTimeout(() => scan(true), 1200);
+    startWorkflowMonitor();
+    scheduleScan(0, true);
   },
   async afterConfigureGraph() {
-    window.clearTimeout(window.__findModelsTimer);
-    window.__findModelsTimer = window.setTimeout(() => scan(true), 700);
+    scanRequestId += 1;
+    lastWorkflowSignature = "";
+    resolvedModels.clear();
+    resolvedNodePackages.clear();
+    scheduleScan(0, true);
   },
 });

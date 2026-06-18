@@ -9,6 +9,8 @@ candidate direct-download URLs from Civitai and Hugging Face.
 - Scans explicit model-selector widgets on the live workflow after a workflow opens.
 - Scans live widget values, nested custom-widget values, and serialized widget values used by dynamic custom loaders.
 - Mirrors ComfyUI's workflow overview by scanning embedded model metadata and treating invalid official model-selector values as missing.
+- Detects model selectors by their model-file option lists, including custom multi-LoRA widgets whose type is not `combo`.
+- Ignores bypassed/disabled nodes, prioritizes live combo and asset widgets, preserves official model URLs and groups all referencing nodes.
 - Recognizes checkpoints, LoRAs, VAEs, ControlNet, text encoders, diffusion models,
   embeddings, and upscale models.
 - Uses ComfyUI's configured model paths, including paths from `extra_model_paths.yaml`.
@@ -24,16 +26,25 @@ candidate direct-download URLs from Civitai and Hugging Face.
   ComfyUI model folder.
 - Shows candidate file sizes and loads successfully downloaded files into their workflow nodes.
 - Shows live downloaded bytes, total size, and percentage while a model download is running.
+- Supports pausing, resuming with HTTP range requests, retrying, and cancelling model downloads.
 - Keeps downloads running when the panel closes and restores active download progress when it is reopened or the page reloads.
 - Searches the configured Quark Netdisk libraries directly for missing model filenames.
 - Ignores serialized workflow metadata, URLs, free-text fields, and generic `model`
   fields on non-loader custom nodes to prevent false missing-model reports.
 - Detects node types missing from ComfyUI's live node registry and matches them against
-  the local TE launcher's official plugin market plus ComfyUI-Manager's official node map.
-- Installs or updates only exact, verified TE-market matches. Before installation it checks
+  workflow package metadata plus ComfyUI-Manager's official node map.
+- Makes every missing-node card clickable and provides retry plus GitHub search actions.
+- Excludes node types already registered by frontend-only LiteGraph extensions to avoid false missing-node reports.
+- Separates missing models, missing nodes, downloads, and settings into dedicated overview-style tabs and can locate referencing nodes on the canvas.
+- Can install missing-node plugins from verified mappings or an explicitly entered GitHub repository URL.
+- Installs or updates only GitHub repositories selected by the user. Before installation it checks
   duplicate repositories, performs a dependency dry run, blocks core runtime dependency
   changes, and runs `pip check`.
-- Does not move, delete, or overwrite model files.
+- Can search a user-configured external model library for exact missing filenames and,
+  after explicit confirmation, move them into the matching registered ComfyUI model folder.
+- Opens the native Windows folder selector when choosing an external model library.
+- Shows the missing model size when workflow metadata, a verified source, or an exact external-library match provides it.
+- Never overwrites an existing model file.
 
 ## Installation
 
@@ -44,10 +55,9 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/YOUR_NAME/ComfyUI_FindModels.git
 ```
 
-Restart ComfyUI. A persistent **查找模型** button appears beside the Queue/Run
-controls in the top toolbar. Hover over it to see the latest missing-model count.
-The button is placed immediately before **显示图像流** when that control is available.
-The panel stays closed during startup and workflow loading; open it from the toolbar.
+Restart ComfyUI. A persistent **查找模型** button appears after the active-task control
+and before the property-panel toggle. The panel stays closed during startup and mounts
+inside ComfyUI's native resizable right-side panel when opened.
 
 No extra Python packages are required.
 
@@ -58,11 +68,11 @@ No extra Python packages are required.
 3. Review local replacement suggestions.
 4. Click **一键加载模型** to load safe high-confidence local matches into their nodes, or apply an
    individual suggestion.
-5. For missing models, click **下载缺失模型**. You can download a Civitai or Hugging
+5. For missing models, click **查找下载来源**. You can download a Civitai or Hugging
    Face candidate or a public match from the two configured Quark Netdisk model libraries
    directly into its matching configured model folder.
-6. Missing nodes automatically query the TE official plugin market. Click **安装或更新插件**
-   only after reviewing the exact matched repository, then restart ComfyUI.
+6. Missing nodes use workflow metadata and ComfyUI-Manager's official mapping. Review the
+   repository before installing, or enter a custom GitHub repository URL, then restart ComfyUI.
 
 The download results are search candidates. Verify the model page, license, base model,
 and filename before downloading. Some Civitai files require authentication, so their
@@ -75,9 +85,9 @@ incorrect folder.
 
 Downloads are accepted only from approved Civitai and Hugging Face HTTPS hosts. Existing
 files are never overwritten. Completed downloads clear ComfyUI's model filename cache so
-the model appears in the matching node selector. Quark downloads use its public share API
-without reading account cookies. Quark may refuse direct downloads for large or restricted
-files; the extension reports that restriction and does not bypass it.
+the model appears in the matching node selector. Quark downloads use its public share API;
+an optional login Cookie can be stored locally for files that require authentication. Quark
+may still refuse restricted files, in which case the extension tries a verified exact-name source.
 
 ## Matching Rules
 
@@ -100,8 +110,8 @@ python -m unittest discover -s tests -v
 
 Workflow model filenames are sent to Civitai, Hugging Face, and the two configured public
 Quark shares only when you explicitly click **下载缺失模型**. Regular scans remain local.
-Missing node names are sent to the TE official plugin market and ComfyUI-Manager's official
-node map to find verified plugin candidates.
+Missing node names are sent to ComfyUI-Manager's official node map when finding verified
+plugin candidates. An optional Quark Cookie is stored only in the local ignored configuration file.
 
 ## License
 

@@ -6,26 +6,11 @@ from node_installer import (
     allowed_repo_url,
     declared_dependency_conflicts,
     dependency_conflicts,
-    market_candidates,
+    github_fallback_candidates,
     missing_node_types,
+    missing_workflow_node_packages,
+    missing_workflow_node_types,
 )
-
-
-MARKET = [
-    {
-        "id": "gguf",
-        "title": "ComfyUI-GGUF",
-        "files": ["https://github.com/city96/ComfyUI-GGUF"],
-        "install_type": "git-clone",
-        "preemptions": ["UnetLoaderGGUF"],
-    },
-    {
-        "id": "mapped",
-        "title": "Mapped Pack",
-        "files": ["https://github.com/example/mapped-pack"],
-        "install_type": "git-clone",
-    },
-]
 
 
 class NodeInstallerTests(unittest.TestCase):
@@ -35,15 +20,60 @@ class NodeInstallerTests(unittest.TestCase):
     def test_ignores_frontend_annotation_nodes(self):
         self.assertEqual(missing_node_types(["Markdown注释", "注释+(mtb)", "Note"], []), [])
 
-    def test_matches_te_market_preemption(self):
-        result = market_candidates(MARKET, "UnetLoaderGGUF")
-        self.assertEqual(result[0]["id"], "gguf")
-        self.assertTrue(result[0]["installable"])
+    def test_ignores_nodes_registered_by_frontend_extensions(self):
+        nodes = [
+            {"type": "获取点", "frontend_registered": True, "active": True},
+            {"type": "ActualMissingNode", "frontend_registered": False, "active": True},
+            {"type": "InactiveMissingNode", "frontend_registered": False, "active": False},
+        ]
+        self.assertEqual(missing_workflow_node_types(nodes, []), ["ActualMissingNode"])
 
-    def test_matches_official_manager_node_map_to_te_market(self):
-        node_map = {"https://github.com/example/mapped-pack": [["MappedNode"], {}]}
-        result = market_candidates(MARKET, "MappedNode", node_map)
-        self.assertEqual(result[0]["id"], "mapped")
+    def test_groups_missing_nodes_by_workflow_package_id(self):
+        nodes = [
+            {
+                "id": 230,
+                "type": "AudioDurationToFrames",
+                "package_id": "syq890610-crypto/Comfyui-Mk-tools",
+                "package_version": "70cd94a6",
+            },
+            {
+                "id": 241,
+                "type": "PresetSizeSelector",
+                "package_id": "syq890610-crypto/Comfyui-Mk-tools",
+                "package_version": "70cd94a6",
+            },
+        ]
+        packages = missing_workflow_node_packages(nodes, [])
+        self.assertEqual(len(packages), 1)
+        self.assertEqual(packages[0]["id"], "syq890610-crypto/Comfyui-Mk-tools")
+        self.assertEqual(packages[0]["count"], 2)
+        self.assertEqual(packages[0]["node_ids"], ["230", "241"])
+
+    def test_groups_unmapped_missing_node_as_unknown_package(self):
+        packages = missing_workflow_node_packages([{"id": 1, "type": "UnknownNode"}], [])
+        self.assertFalse(packages[0]["known"])
+        self.assertEqual(packages[0]["node_types"], ["UnknownNode"])
+
+    def test_builds_github_fallback_from_workflow_package_id(self):
+        result = github_fallback_candidates(
+            "syq890610-crypto/Comfyui-Mk-tools",
+            "AudioDurationToFrames",
+            {},
+        )
+        self.assertEqual(result[0]["repo_url"], "https://github.com/syq890610-crypto/Comfyui-Mk-tools")
+        self.assertEqual(result[0]["reason"], "workflow_package_github")
+
+    def test_builds_github_fallback_from_manager_mapping(self):
+        result = github_fallback_candidates(
+            "",
+            "MappedNode",
+            {"https://github.com/example/mapped-pack": [["MappedNode"], {}]},
+        )
+        self.assertEqual(result[0]["repo_url"], "https://github.com/example/mapped-pack")
+        self.assertEqual(result[0]["reason"], "comfy_manager_github")
+
+    def test_does_not_install_from_untrusted_package_text(self):
+        self.assertEqual(github_fallback_candidates("not a github repository", "UnknownNode", {}), [])
 
     def test_rejects_non_github_install_urls(self):
         self.assertFalse(allowed_repo_url("https://example.com/plugin"))

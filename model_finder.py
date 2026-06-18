@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import PurePosixPath
@@ -13,10 +14,19 @@ MODEL_EXTENSIONS = {
     ".gguf",
     ".onnx",
     ".pt",
+    ".pt2",
     ".pth",
+    ".pkl",
     ".safetensors",
+    ".sft",
 }
 STANDARD_LOADER_HINTS = (
+    "instantid",
+    "ipadapter",
+    "ip_adapter",
+    "samloader",
+    "sam_loader",
+    "ultralytics",
     "checkpoint",
     "lora",
     "vae",
@@ -24,6 +34,7 @@ STANDARD_LOADER_HINTS = (
     "clip",
     "textencoder",
     "text_encoder",
+    "textencode",
     "unet",
     "diffusion",
     "upscale",
@@ -61,10 +72,29 @@ EXPLICIT_MODEL_WIDGETS = (
     "upscale_model_name",
     "embedding_name",
 )
+MODEL_WIDGET_PATTERNS = (
+    re.compile(r"^(?:lora|lycoris)_?\d+$"),
+    re.compile(r"^(?:ckpt|checkpoint|vae|controlnet|control_net|clip|clip_vision|text_encoder|unet|diffusion_model|upscale_model)_?\d+$"),
+    re.compile(r"^(?:model|model_name)_\d+$"),
+)
 
 CATEGORY_HINTS = (
-    ("diffusion_models", ("fantasytalking", "fantasyportrait")),
-    ("upscale_models", ("rife", "frame_interpolation", "film", "upscale", "esrgan", "super_resolution", "superresolution")),
+    ("LLM", ("llama_cpp", "llama cpp", "llama-cpp", "llm", "mmproj")),
+    # InstantID uses an IP-Adapter-format file, but its loader registers the
+    # official ComfyUI category as "instantid". Keep this before ipadapter.
+    ("instantid", ("instantid", "instant_id", "instant id")),
+    ("ipadapter", ("ipadapter", "ip_adapter", "ip adapter")),
+    ("ultralytics_segm", ("ultralytics_segm", "ultralytics segm", "segm_", "segm/")),
+    ("ultralytics_bbox", ("ultralytics_bbox", "ultralytics bbox", "bbox_", "bbox/")),
+    ("sams", ("samloader", "sam_loader", "sam loader", "sam_model", "sam model")),
+    ("diffusion_models", ("fantasytalking", "fantasyportrait", "infinitetalk")),
+    ("detection", ("detection", "detector", "vitpose", "yolo")),
+    ("frame_interpolation", ("rife", "frame_interpolation", "frame interpolation", "film")),
+    ("audio_encoders", ("audio_encoder", "audio encoder", "wav2vec", "whisper")),
+    ("background_removal", ("background_removal", "background removal", "rembg")),
+    ("geometry_estimation", ("geometry_estimation", "geometry estimation", "depth_anything")),
+    ("optical_flow", ("optical_flow", "optical flow")),
+    ("upscale_models", ("upscale", "esrgan", "super_resolution", "superresolution")),
     ("controlnet", ("controlnet", "control_net", "control")),
     ("embeddings", ("embedding", "textual_inversion")),
     ("vae", ("vae",)),
@@ -76,6 +106,12 @@ CATEGORY_HINTS = (
 )
 
 CATEGORY_ALIASES = {
+    "LLM": ("LLM",),
+    "instantid": ("instantid",),
+    "ipadapter": ("ipadapter",),
+    "sams": ("sams",),
+    "ultralytics_bbox": ("ultralytics_bbox",),
+    "ultralytics_segm": ("ultralytics_segm",),
     "checkpoints": ("checkpoints",),
     "loras": ("loras",),
     "vae": ("vae",),
@@ -85,7 +121,19 @@ CATEGORY_ALIASES = {
     "diffusion_models": ("diffusion_models", "unet"),
     "upscale_models": ("upscale_models",),
     "embeddings": ("embeddings",),
+    "detection": ("detection",),
+    "frame_interpolation": ("frame_interpolation",),
+    "audio_encoders": ("audio_encoders",),
+    "background_removal": ("background_removal",),
+    "geometry_estimation": ("geometry_estimation",),
+    "optical_flow": ("optical_flow",),
     "unknown": (
+        "LLM",
+        "instantid",
+        "ipadapter",
+        "sams",
+        "ultralytics_bbox",
+        "ultralytics_segm",
         "checkpoints",
         "loras",
         "vae",
@@ -110,6 +158,11 @@ class Reference:
     node_type: str | None = None
     strict: bool = True
     official_missing: bool = False
+    official_valid: bool = False
+    source_url: str | None = None
+    source_hash: str | None = None
+    source_hash_type: str | None = None
+    source_size: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -120,6 +173,11 @@ class Reference:
             "node_type": self.node_type,
             "strict": self.strict,
             "official_missing": self.official_missing,
+            "official_valid": self.official_valid,
+            "source_url": self.source_url,
+            "source_hash": self.source_hash,
+            "source_hash_type": self.source_hash_type,
+            "source_size": self.source_size,
         }
 
 
@@ -131,6 +189,11 @@ def basename(value: str) -> str:
     return PurePosixPath(normalize_path(value)).name
 
 
+def model_name_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", basename(value)).casefold()
+    return "".join(char for char in normalized if char.isalnum())
+
+
 def is_model_name(value: str) -> bool:
     if "://" in value or value.startswith(("http:", "https:")):
         return False
@@ -138,11 +201,18 @@ def is_model_name(value: str) -> bool:
     return PurePosixPath(clean).suffix.lower() in MODEL_EXTENSIONS
 
 
-def classify(hint: str) -> str:
+def classify(hint: str, registered_categories: Iterable[str] = ()) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "_", hint.lower())
     for category, terms in CATEGORY_HINTS:
         if any(term.replace(" ", "_") in normalized for term in terms):
             return category
+    for category in registered_categories:
+        category_hint = re.sub(r"[^a-z0-9]+", "_", str(category).lower()).strip("_")
+        if len(category_hint) >= 4 and (
+            category_hint in normalized
+            or category_hint.replace("_", "") in normalized.replace("_", "")
+        ):
+            return str(category)
     return "unknown"
 
 
@@ -153,7 +223,13 @@ def normalized_stem(value: str) -> str:
     return "".join(token for token in tokens if token and not ignored.match(token))
 
 
-def extract_references(payload: Any) -> list[Reference]:
+def is_explicit_model_widget(value: Any) -> bool:
+    widget_hint = re.sub(r"[^a-z0-9_]+", "", str(value or "").lower())
+    return widget_hint in EXPLICIT_MODEL_WIDGETS or any(pattern.fullmatch(widget_hint) for pattern in MODEL_WIDGET_PATTERNS)
+
+
+def extract_references(payload: Any, registered_categories: Iterable[str] = ()) -> list[Reference]:
+    registered_categories = tuple(registered_categories)
     found: dict[tuple[str, str, str | None, str | None], Reference] = {}
 
     def add(
@@ -164,29 +240,40 @@ def extract_references(payload: Any) -> list[Reference]:
         node_type: Any = None,
         model_selector: bool = False,
         model_value_valid: bool | None = None,
+        source_url: Any = None,
+        source_hash: Any = None,
+        source_hash_type: Any = None,
+        source_size: Any = None,
+        category_override: Any = None,
     ) -> None:
         if not is_model_name(value):
             return
-        widget_hint = re.sub(r"[^a-z0-9_]+", "", str(widget or "").lower())
         node_hint = re.sub(r"[^a-z0-9_]+", "", str(node_type or "").lower())
         if node_id is not None:
-            explicit_widget = widget_hint in EXPLICIT_MODEL_WIDGETS
+            explicit_widget = is_explicit_model_widget(widget)
             # Custom loaders frequently translate the widget label (for example
             # "模型"), so the file extension plus the loader node type is the
             # reliable signal. Non-loader custom nodes remain excluded.
             loader_widget = "loader" in node_hint
-            if not explicit_widget and not loader_widget and not model_selector:
+            model_node = any(term in node_hint for term in STANDARD_LOADER_HINTS)
+            if not explicit_widget and not loader_widget and not model_node and not model_selector:
                 return
         ref = Reference(
             name=normalize_path(value),
-            category=classify(f"{hint} {value}"),
+            category=str(category_override) if isinstance(category_override, str) and category_override else classify(f"{hint} {value}", registered_categories),
             node_id=None if node_id is None else str(node_id),
             widget=None if widget is None else str(widget),
             node_type=None if node_type is None else str(node_type),
             strict=model_selector
+            or is_explicit_model_widget(widget)
             or "loader" in node_hint
             or any(term in node_hint for term in STANDARD_LOADER_HINTS),
             official_missing=model_selector and model_value_valid is False,
+            official_valid=model_selector and model_value_valid is True,
+            source_url=source_url if isinstance(source_url, str) else None,
+            source_hash=source_hash if isinstance(source_hash, str) else None,
+            source_hash_type=source_hash_type if isinstance(source_hash_type, str) else None,
+            source_size=int(source_size) if isinstance(source_size, (int, float)) and source_size > 0 else None,
         )
         found[(ref.name.lower(), ref.category, ref.node_id, ref.widget)] = ref
 
@@ -203,6 +290,8 @@ def extract_references(payload: Any) -> list[Reference]:
 
         current_id = value.get("id", node_id)
         current_type = value.get("type") or value.get("class_type") or node_type
+        if current_id is not None and value.get("active") is False:
+            return
         if isinstance(value.get("name"), str) and isinstance(value.get("directory"), str):
             add(
                 value["name"],
@@ -211,6 +300,12 @@ def extract_references(payload: Any) -> list[Reference]:
                 None,
                 current_type,
                 True,
+                None,
+                value.get("url"),
+                value.get("hash"),
+                value.get("hash_type"),
+                value.get("size"),
+                value.get("directory"),
             )
         if isinstance(value.get("widgets"), list):
             for widget in value["widgets"]:
@@ -229,6 +324,11 @@ def extract_references(payload: Any) -> list[Reference]:
                                 current_type,
                                 bool(widget.get("model_selector")),
                                 widget.get("model_value_valid"),
+                                widget.get("source_url"),
+                                widget.get("source_hash"),
+                                widget.get("source_hash_type"),
+                                widget.get("source_size"),
+                                widget.get("directory"),
                             )
                         elif isinstance(item, list):
                             for nested in item:
@@ -249,10 +349,22 @@ def extract_references(payload: Any) -> list[Reference]:
     walk(payload)
     references = list(found.values())
     located_names = {ref.name.lower() for ref in references if ref.node_id is not None}
+    live_widget_refs = {
+        (ref.name.lower(), ref.node_id)
+        for ref in references
+        if ref.node_id is not None and ref.widget is not None
+    }
     filtered = [
         ref
         for ref in references
-        if ref.node_id is not None or ref.name.lower() not in located_names
+        if (
+            (ref.node_id is not None or ref.name.lower() not in located_names)
+            and not (
+                ref.node_id is not None
+                and ref.widget is None
+                and (ref.name.lower(), ref.node_id) in live_widget_refs
+            )
+        )
     ]
     deduplicated: dict[tuple[str, str | None, str | None], Reference] = {}
     for ref in filtered:
@@ -263,9 +375,13 @@ def extract_references(payload: Any) -> list[Reference]:
     return list(deduplicated.values())
 
 
-def load_installed(get_filename_list: Callable[[str], Iterable[str]]) -> dict[str, list[str]]:
+def load_installed(
+    get_filename_list: Callable[[str], Iterable[str]], extra_categories: Iterable[str] = ()
+) -> dict[str, list[str]]:
     installed: dict[str, list[str]] = {}
-    for category in {alias for aliases in CATEGORY_ALIASES.values() for alias in aliases}:
+    categories = {alias for aliases in CATEGORY_ALIASES.values() for alias in aliases}
+    categories.update(category for category in extra_categories if category and category != "unknown")
+    for category in categories:
         try:
             installed[category] = sorted({normalize_path(str(name)) for name in get_filename_list(category)})
         except Exception:
@@ -274,10 +390,18 @@ def load_installed(get_filename_list: Callable[[str], Iterable[str]]) -> dict[st
 
 
 def match_reference(reference: Reference, installed: dict[str, list[str]]) -> dict[str, Any]:
-    categories = CATEGORY_ALIASES.get(reference.category, CATEGORY_ALIASES["unknown"])
+    if reference.official_valid:
+        return {"status": "installed", "match": None}
+    categories = CATEGORY_ALIASES.get(
+        reference.category,
+        CATEGORY_ALIASES["unknown"] if reference.category == "unknown" else (reference.category,),
+    )
+    if reference.official_missing:
+        categories = tuple(dict.fromkeys((*categories, *CATEGORY_ALIASES["unknown"], *installed.keys())))
     candidates = [(category, name) for category in categories for name in installed.get(category, [])]
     wanted_path = normalize_path(reference.name).lower()
     wanted_base = basename(reference.name).lower()
+    wanted_key = model_name_key(reference.name)
     wanted_stem = normalized_stem(reference.name)
 
     best: tuple[float, str, str, str] | None = None
@@ -288,6 +412,8 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
             score, reason = 1.0, "exact_path"
         elif candidate_base.lower() == wanted_base:
             score, reason = 0.99, "exact_filename"
+        elif wanted_key and model_name_key(candidate_path) == wanted_key:
+            score, reason = 0.985, "equivalent_filename"
         elif wanted_stem and normalized_stem(candidate_path) == wanted_stem:
             score, reason = 0.96, "normalized_filename"
         else:
@@ -303,10 +429,11 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
 
     score, name, category, reason = best
     status = (
-        "missing"
+        "installed"
+        if reason == "exact_path" or (reason in {"exact_filename", "equivalent_filename"} and not reference.official_missing)
+        else "missing"
         if reference.official_missing
-        else "installed"
-        if reason == "exact_path"
+        and reason not in {"exact_filename", "equivalent_filename"}
         else "adaptable"
         if score >= 0.78
         else "missing"
@@ -328,17 +455,41 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
     }
 
 
-def analyze(payload: Any, get_filename_list: Callable[[str], Iterable[str]]) -> dict[str, Any]:
-    references = extract_references(payload)
-    installed = load_installed(get_filename_list)
+def analyze(
+    payload: Any,
+    get_filename_list: Callable[[str], Iterable[str]],
+    registered_categories: Iterable[str] = (),
+) -> dict[str, Any]:
+    registered_categories = tuple(registered_categories)
+    references = extract_references(payload, registered_categories)
+    installed = load_installed(
+        get_filename_list,
+        (*registered_categories, *(reference.category for reference in references)),
+    )
     results = []
     for reference in references:
         results.append({**reference.as_dict(), **match_reference(reference, installed)})
+    resolved_widgets = {
+        (item["node_id"], item["widget"])
+        for item in results
+        if item["status"] == "installed" and item["node_id"] is not None and item["widget"] is not None
+    }
+    resolved_models = {
+        (item["category"], basename(item["name"]).lower())
+        for item in results
+        if item["status"] == "installed"
+    }
     unresolved_by_name: dict[str, dict[str, Any]] = {}
     for item in results:
         if item["status"] not in {"adaptable", "missing"}:
             continue
+        if (
+            (item["node_id"], item["widget"]) in resolved_widgets
+            or (item["category"], basename(item["name"]).lower()) in resolved_models
+        ):
+            continue
         key = item["name"].lower()
+        reference = {"node_id": item["node_id"], "widget": item["widget"], "node_type": item["node_type"]}
         current = unresolved_by_name.get(key)
         if (
             current is None
@@ -349,7 +500,12 @@ def analyze(payload: Any, get_filename_list: Callable[[str], Iterable[str]]) -> 
                 and item["official_missing"] == current["official_missing"]
             )
         ):
+            item["referencing_nodes"] = [reference] if item["node_id"] is not None else []
             unresolved_by_name[key] = item
+        elif item["node_id"] is not None:
+            refs = current.setdefault("referencing_nodes", [])
+            if reference not in refs:
+                refs.append(reference)
     unresolved = list(unresolved_by_name.values())
     return {
         "summary": {

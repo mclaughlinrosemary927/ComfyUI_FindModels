@@ -13,7 +13,6 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 
-TE_MARKET_URL = "https://extension-list.oystermercury.top/comfyui/custom-node-list.json"
 COMFY_MANAGER_NODE_MAP_URL = "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/extension-node-map.json"
 PROTECTED_DEPENDENCIES = {
     "torch",
@@ -42,6 +41,49 @@ def missing_node_types(node_types: Iterable[Any], registered: Iterable[str]) -> 
     )
 
 
+def missing_workflow_node_types(nodes: Iterable[Any], registered: Iterable[str]) -> list[str]:
+    return missing_node_types(
+        (
+            node.get("type")
+            for node in nodes
+            if isinstance(node, dict)
+            and node.get("active") is not False
+            and node.get("frontend_registered") is not True
+        ),
+        registered,
+    )
+
+
+def missing_workflow_node_packages(nodes: Iterable[Any], registered: Iterable[str]) -> list[dict[str, Any]]:
+    missing = set(missing_workflow_node_types(nodes, registered))
+    packages: dict[str, dict[str, Any]] = {}
+    for node in nodes:
+        if not isinstance(node, dict) or str(node.get("type") or "").strip() not in missing:
+            continue
+        node_type = str(node["type"]).strip()
+        package_id = str(node.get("package_id") or "").strip()
+        key = package_id.lower() if package_id else f"__unknown__:{node_type.lower()}"
+        package = packages.setdefault(
+            key,
+            {
+                "id": package_id or "__unknown__",
+                "title": package_id or "未知包",
+                "known": bool(package_id),
+                "version": str(node.get("package_version") or "").strip(),
+                "node_types": [],
+                "node_ids": [],
+                "count": 0,
+            },
+        )
+        if node_type not in package["node_types"]:
+            package["node_types"].append(node_type)
+        node_id = node.get("id")
+        if node_id is not None and str(node_id) not in package["node_ids"]:
+            package["node_ids"].append(str(node_id))
+        package["count"] += 1
+    return sorted(packages.values(), key=lambda item: (not item["known"], item["title"].lower()))
+
+
 def normalize_repo_url(value: str) -> str:
     url = value.strip().rstrip("/")
     if url.endswith(".git"):
@@ -54,51 +96,51 @@ def allowed_repo_url(value: str) -> bool:
     return parsed.scheme == "https" and parsed.hostname == "github.com" and len(parsed.path.strip("/").split("/")) >= 2
 
 
-def market_candidates(
-    entries: Iterable[dict[str, Any]], node_type: str, node_map: dict[str, Any] | None = None
+def github_fallback_candidates(
+    package_id: str,
+    node_type: str,
+    node_map: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    mapped_repositories = {
-        normalize_repo_url(repo_url)
-        for repo_url, value in (node_map or {}).items()
-        if isinstance(value, list) and value and isinstance(value[0], list) and node_type in value[0]
-    }
-    candidates = []
-    for entry in entries:
-        files = entry.get("files") or []
-        repo_url = next((str(item) for item in files if allowed_repo_url(str(item))), "")
-        if entry.get("install_type", "git-clone") != "git-clone" or not repo_url:
-            continue
-        confidence = 0.0
-        reason = ""
-        if node_type in (entry.get("preemptions") or []):
-            confidence, reason = 1.0, "official_node_mapping"
-        elif normalize_repo_url(repo_url) in mapped_repositories:
-            confidence, reason = 0.99, "comfy_manager_node_mapping"
-        else:
-            pattern = entry.get("nodename_pattern")
-            if pattern:
-                try:
-                    if re.search(str(pattern), node_type):
-                        confidence, reason = 0.96, "official_node_pattern"
-                except re.error:
-                    pass
-        if not confidence:
-            continue
-        candidates.append(
-            {
-                "id": str(entry.get("id") or normalize_repo_url(repo_url).rsplit("/", 1)[-1]),
-                "title": str(entry.get("title") or entry.get("id") or repo_url),
-                "author": str(entry.get("author") or ""),
-                "description": str(entry.get("description") or ""),
-                "repo_url": repo_url,
-                "confidence": confidence,
-                "reason": reason,
+    """Build installable candidates only from workflow or official-manager GitHub mappings."""
+    candidates: dict[str, dict[str, Any]] = {}
+    normalized_package = package_id.strip().strip("/")
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", normalized_package):
+        repo_url = f"https://github.com/{normalized_package}"
+        candidates[normalize_repo_url(repo_url)] = {
+            "id": normalized_package,
+            "title": normalized_package,
+            "author": normalized_package.split("/", 1)[0],
+            "description": "工作流 aux_id 提供的 GitHub 插件仓库",
+            "repo_url": repo_url,
+            "confidence": 1.0,
+            "reason": "workflow_package_github",
+            "installable": True,
+            "pip": [],
+            "apt_dependency": [],
+        }
+    for repo_url, value in (node_map or {}).items():
+        if (
+            allowed_repo_url(str(repo_url))
+            and isinstance(value, list)
+            and value
+            and isinstance(value[0], list)
+            and node_type in value[0]
+        ):
+            normalized = normalize_repo_url(str(repo_url))
+            parts = normalized.rsplit("/", 2)
+            candidates[normalized] = {
+                "id": "/".join(parts[-2:]),
+                "title": parts[-1],
+                "author": parts[-2],
+                "description": "ComfyUI-Manager 官方节点映射提供的 GitHub 插件仓库",
+                "repo_url": str(repo_url).rstrip("/"),
+                "confidence": 0.99,
+                "reason": "comfy_manager_github",
                 "installable": True,
-                "pip": entry.get("pip") or [],
-                "apt_dependency": entry.get("apt_dependency") or [],
+                "pip": [],
+                "apt_dependency": [],
             }
-        )
-    return sorted(candidates, key=lambda item: (-item["confidence"], item["title"].lower()))
+    return sorted(candidates.values(), key=lambda item: (-item["confidence"], item["title"].lower()))
 
 
 def _comfy_root(folder_paths_module: Any) -> Path:
@@ -258,10 +300,14 @@ def _existing_repo(custom_nodes: Path, repo_url: str, git: str, env: dict[str, s
     return None
 
 
-def install_market_plugin(folder_paths_module: Any, candidate: dict[str, Any]) -> dict[str, Any]:
+def install_market_plugin(
+    folder_paths_module: Any,
+    candidate: dict[str, Any],
+    install_dependencies: bool = True,
+) -> dict[str, Any]:
     repo_url = str(candidate.get("repo_url") or "")
     if not candidate.get("installable") or not allowed_repo_url(repo_url):
-        raise RuntimeError("只允许安装 TE 官方插件市场中经过节点名精确匹配的 GitHub 插件")
+        raise RuntimeError("只允许安装工作流 aux_id、ComfyUI-Manager 官方映射或用户指定的 GitHub 插件")
 
     root = _comfy_root(folder_paths_module)
     custom_nodes = root / "custom_nodes"
@@ -284,28 +330,35 @@ def install_market_plugin(folder_paths_module: Any, candidate: dict[str, Any]) -
             repo = temp_path
 
         declared = candidate.get("pip") or []
-        conflicts = dependency_conflicts(repo) + declared_dependency_conflicts(declared)
-        if candidate.get("apt_dependency"):
-            conflicts.append("插件需要系统级 apt 依赖，Windows TE 环境无法安全自动安装")
+        conflicts = dependency_conflicts(repo) + declared_dependency_conflicts(declared) if install_dependencies else []
+        if install_dependencies and candidate.get("apt_dependency"):
+            conflicts.append("插件需要系统级 apt 依赖，当前 Windows 环境无法安全自动安装")
         if conflicts:
             raise RuntimeError("\n".join(conflicts))
         requirements = _requirement_files(repo)
-        conflicts_before = set(
-            _run([python, "-m", "pip", "check"], repo, env, allow_failure=True).splitlines()
-        )
-        for requirement in requirements:
-            _run([python, "-m", "pip", "install", "--dry-run", "-r", str(requirement)], repo, env)
-        for requirement in requirements:
-            _run([python, "-m", "pip", "install", "-r", str(requirement)], repo, env)
-        if declared:
-            _run([python, "-m", "pip", "install", "--dry-run", *map(str, declared)], repo, env)
-            _run([python, "-m", "pip", "install", *map(str, declared)], repo, env)
-        if (repo / "install.py").is_file():
+        conflicts_before = set()
+        if install_dependencies:
+            conflicts_before = set(
+                _run([python, "-m", "pip", "check"], repo, env, allow_failure=True).splitlines()
+            )
+            for requirement in requirements:
+                _run([python, "-m", "pip", "install", "--dry-run", "-r", str(requirement)], repo, env)
+            for requirement in requirements:
+                _run([python, "-m", "pip", "install", "-r", str(requirement)], repo, env)
+            if declared:
+                _run([python, "-m", "pip", "install", "--dry-run", *map(str, declared)], repo, env)
+                _run([python, "-m", "pip", "install", *map(str, declared)], repo, env)
+        if install_dependencies and (repo / "install.py").is_file():
             _run([python, "install.py"], repo, env)
-        conflicts_after = set(
-            _run([python, "-m", "pip", "check"], repo, env, allow_failure=True).splitlines()
+        conflicts_after = (
+            set(_run([python, "-m", "pip", "check"], repo, env, allow_failure=True).splitlines())
+            if install_dependencies else conflicts_before
         )
         new_conflicts = sorted(conflicts_after - conflicts_before)
+        if new_conflicts:
+            raise RuntimeError(
+                "安装依赖后发现新的环境冲突，插件未启用：\n" + "\n".join(new_conflicts)
+            )
 
         if temp_path:
             temp_path.replace(target)
@@ -315,7 +368,8 @@ def install_market_plugin(folder_paths_module: Any, candidate: dict[str, Any]) -
             "action": action,
             "title": candidate.get("title"),
             "path": str(installed_path),
-            "dependencies": len(requirements),
+            "dependencies": len(requirements) if install_dependencies else 0,
+            "dependencies_skipped": not install_dependencies,
             "existing_conflicts": sorted(conflicts_before),
             "new_conflicts": new_conflicts,
             "pip_check": "No new broken requirements found." if not new_conflicts else "\n".join(new_conflicts),
