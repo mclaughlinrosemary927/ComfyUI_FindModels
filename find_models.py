@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -20,12 +21,12 @@ from aiohttp import web
 import folder_paths
 from server import PromptServer
 
-from .model_finder import MODEL_EXTENSIONS, analyze, basename, model_name_key, normalize_path, normalized_stem
+from .model_finder import MODEL_EXTENSIONS, analyze, basename, normalize_path, normalized_stem
 from .node_installer import (
     COMFY_MANAGER_NODE_MAP_URL,
     allowed_repo_url,
     github_fallback_candidates,
-    install_market_plugin,
+    install_plugin,
     missing_workflow_node_packages,
     missing_workflow_node_types,
 )
@@ -45,7 +46,6 @@ ALLOWED_DOWNLOAD_HOSTS = {
 QUARK_MODEL_LIBRARIES = (
     {"name": "夸克模型库 1", "share_id": "fb913d649b18", "url": "https://pan.quark.cn/s/fb913d649b18"},
     {"name": "夸克模型库 2", "share_id": "4680ac866516", "url": "https://pan.quark.cn/s/4680ac866516"},
-    {"name": "夸克模型库 2（兼容）", "share_id": "4680ac8665162", "url": "https://pan.quark.cn/s/4680ac8665162"},
 )
 QUARK_API = "https://drive-pc.quark.cn/1/clouddrive"
 QUARK_USER_AGENT = (
@@ -133,10 +133,6 @@ def _exact_model_name(wanted: str, candidate: str) -> bool:
     return basename(wanted).lower() == basename(candidate).lower()
 
 
-def _equivalent_model_name(wanted: str, candidate: str) -> bool:
-    return _exact_model_name(wanted, candidate) or model_name_key(wanted) == model_name_key(candidate)
-
-
 def _is_https_url(value: Any) -> bool:
     return isinstance(value, str) and value.startswith("https://")
 
@@ -194,15 +190,6 @@ def _safe_filename(value: str) -> str:
     if not name or not name.lower().endswith(tuple(MODEL_EXTENSIONS)):
         raise web.HTTPBadRequest(text="Invalid model filename")
     return name
-
-
-def _safe_relative_model_name(value: str) -> Path:
-    normalized = str(value).replace("\\", "/").strip().lstrip("/")
-    parts = [part for part in normalized.split("/") if part]
-    if not parts or any(part in {".", ".."} for part in parts):
-        raise web.HTTPBadRequest(text="Invalid model path")
-    _safe_filename(parts[-1])
-    return Path(*parts)
 
 
 def _official_relative_model_name(value: str, category: str) -> Path:
@@ -292,6 +279,81 @@ def _registered_category_roots() -> list[tuple[str, Path]]:
             except (OSError, TypeError, ValueError):
                 continue
     return roots
+
+
+def _registered_category(value: Any) -> str | None:
+    name = str(value or "").strip()
+    registered = getattr(folder_paths, "folder_names_and_paths", None)
+    if not name or not isinstance(registered, dict):
+        return None
+    return next((str(category) for category in registered if str(category).lower() == name.lower()), None)
+
+
+def _node_registered_category(node_type: Any, widget_name: Any) -> str | None:
+    """Resolve a model category from the installed node's actual INPUT_TYPES registration."""
+    try:
+        import nodes
+
+        node_class = nodes.NODE_CLASS_MAPPINGS.get(str(node_type or ""))
+        input_types = node_class.INPUT_TYPES()
+    except Exception:
+        return None
+    widget = str(widget_name or "")
+    spec = next(
+        (
+            section.get(widget)
+            for section in (input_types.get("required", {}), input_types.get("optional", {}))
+            if isinstance(section, dict) and widget in section
+        ),
+        None,
+    )
+    values = spec[0] if isinstance(spec, (tuple, list)) and spec else None
+    if isinstance(values, (tuple, list)):
+        normalized = {normalize_path(str(item)).lower() for item in values if isinstance(item, str)}
+        if normalized:
+            matches = []
+            registered = getattr(folder_paths, "folder_names_and_paths", {})
+            for category in registered if isinstance(registered, dict) else ():
+                try:
+                    available = {
+                        normalize_path(str(item)).lower()
+                        for item in folder_paths.get_filename_list(category)
+                    }
+                except Exception:
+                    continue
+                if normalized == available or normalized.intersection(available):
+                    matches.append(str(category))
+            if len(set(matches)) == 1:
+                return matches[0]
+    try:
+        source = inspect.getsource(node_class.INPUT_TYPES)
+    except (OSError, TypeError):
+        return None
+    categories = {
+        category
+        for raw in re.findall(r"get_filename_list\(\s*['\"]([^'\"]+)['\"]", source)
+        if (category := _registered_category(raw))
+    }
+    return next(iter(categories)) if len(categories) == 1 else None
+
+
+def _resolve_model_category(model: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
+    current_value = str(model.get("category") or "unknown")
+    current = _registered_category(current_value)
+    if current or current_value in DOWNLOAD_CATEGORY_ALIASES:
+        return current or current_value
+    match_category = _registered_category((model.get("match") or {}).get("category"))
+    if match_category:
+        return match_category
+    node_category = _node_registered_category(model.get("node_type"), model.get("widget"))
+    if node_category:
+        return node_category
+    candidate_categories = {
+        category
+        for candidate in candidates
+        if (category := _registered_category(candidate.get("category_hint")))
+    }
+    return next(iter(candidate_categories)) if len(candidate_categories) == 1 else "unknown"
 
 
 def _external_category_hint(path: Path, root: Path) -> str | None:
@@ -473,15 +535,6 @@ async def _refresh_external_index(root: Path) -> None:
         EXTERNAL_INDEX_ROOT = str(root)
     finally:
         EXTERNAL_INDEX_TASK = None
-
-
-def _cached_external_model_index(root: Path | None) -> dict[str, list[dict[str, Any]]]:
-    global EXTERNAL_INDEX_TASK
-    if root is None:
-        return {}
-    if EXTERNAL_INDEX_ROOT != str(root) and EXTERNAL_INDEX_TASK is None:
-        EXTERNAL_INDEX_TASK = asyncio.create_task(_refresh_external_index(root))
-    return EXTERNAL_INDEX_CACHE if EXTERNAL_INDEX_ROOT == str(root) else {}
 
 
 async def _external_candidates_index(
@@ -681,45 +734,56 @@ async def _quark_candidates(
     visited = set()
     candidates = []
     wanted = normalized_stem(name)
+    wanted_filename = basename(name).casefold()
     preferred_folders = QUARK_CATEGORY_FOLDERS.get(category, {category})
-    while queue and len(visited) < 80 and len(candidates) < 8:
+    while queue and len(visited) < 2000:
         directory = queue.pop(0)
         if directory in visited:
             continue
         visited.add(directory)
-        query = (
-            f"/share/sharepage/detail?pr=ucpro&fr=pc&pwd_id={quote(share_id)}"
-            f"&stoken={quote(stoken, safe='')}&pdir_fid={quote(directory)}&force=0"
-            "&_page=1&_size=200&_sort=file_type:asc,file_name:asc"
-        )
-        detail = await _quark_json(session, "GET", query, share_id=share_id)
-        for item in ((detail or {}).get("data") or {}).get("list", []):
-            item_name = str(item.get("file_name", ""))
-            if item.get("dir"):
-                if item_name.lower() in preferred_folders:
-                    queue = [item["fid"]]
-                else:
-                    queue.append(item["fid"])
-                continue
-            if not item_name.lower().endswith(tuple(MODEL_EXTENSIONS)):
-                continue
-            confidence = SequenceMatcher(None, wanted, normalized_stem(item_name)).ratio()
-            if confidence >= 0.62:
-                candidates.append(
-                    {
-                        "provider": library["name"],
-                        "name": item_name,
-                        "url": library["url"],
-                        "confidence": round(confidence, 3),
-                        "size": _size_value(item.get("size")),
-                        "quark": {
-                            "share_id": share_id,
-                            "fid": item.get("fid"),
-                            "fid_token": _quark_token(item.get("share_fid_token")),
-                            "filename": item_name,
-                        },
-                    }
-                )
+        page = 1
+        while page <= 100:
+            query = (
+                f"/share/sharepage/detail?pr=ucpro&fr=pc&pwd_id={quote(share_id)}"
+                f"&stoken={quote(stoken, safe='')}&pdir_fid={quote(directory)}&force=0"
+                f"&_page={page}&_size=200&_sort=file_type:asc,file_name:asc"
+            )
+            detail = await _quark_json(session, "GET", query, share_id=share_id)
+            items = ((detail or {}).get("data") or {}).get("list", [])
+            if not isinstance(items, list):
+                break
+            for item in items:
+                item_name = str(item.get("file_name", ""))
+                if item.get("dir"):
+                    if item_name.lower() in preferred_folders:
+                        queue.insert(0, item["fid"])
+                    else:
+                        queue.append(item["fid"])
+                    continue
+                if not item_name.lower().endswith(tuple(MODEL_EXTENSIONS)):
+                    continue
+                confidence = SequenceMatcher(None, wanted, normalized_stem(item_name)).ratio()
+                if item_name.casefold() == wanted_filename or confidence >= 0.62:
+                    candidates.append(
+                        {
+                            "provider": library["name"],
+                            "name": item_name,
+                            "url": library["url"],
+                            "confidence": 1.0 if item_name.casefold() == wanted_filename else round(confidence, 3),
+                            "size": _size_value(item.get("size")),
+                            "quark": {
+                                "share_id": share_id,
+                                "fid": item.get("fid"),
+                                "fid_token": _quark_token(item.get("share_fid_token")),
+                                "filename": item_name,
+                            },
+                        }
+                    )
+                    if item_name.casefold() == wanted_filename:
+                        return candidates
+            if len(items) < 200:
+                break
+            page += 1
     return candidates
 
 
@@ -744,6 +808,7 @@ async def scan_models(request: web.Request) -> web.Response:
     )
     for model in result["models"]:
         candidates = external_index.get(basename(model["name"]).lower(), [])
+        model["category"] = _resolve_model_category(model, candidates)
         candidates.sort(
             key=lambda item: (
                 item.get("category_hint") != model.get("category"),
@@ -791,22 +856,6 @@ async def scan_models(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
-@PromptServer.instance.routes.get("/findmodels/external-folder")
-async def get_external_folder(request: web.Request) -> web.Response:
-    path = _load_external_folder()
-    return web.json_response({"path": str(path) if path else ""})
-
-
-@PromptServer.instance.routes.post("/findmodels/external-folder")
-async def set_external_folder(request: web.Request) -> web.Response:
-    payload = await request.json()
-    path = Path(str(payload.get("path", ""))).expanduser().resolve()
-    if not path.is_dir():
-        raise web.HTTPBadRequest(text="External model folder does not exist")
-    await asyncio.to_thread(_save_external_folder, path)
-    return web.json_response({"path": str(path)})
-
-
 @PromptServer.instance.routes.post("/findmodels/external-folder/select")
 async def select_external_folder(request: web.Request) -> web.Response:
     try:
@@ -821,7 +870,33 @@ async def select_external_folder(request: web.Request) -> web.Response:
 
 @PromptServer.instance.routes.get("/findmodels/quark-auth")
 async def get_quark_auth(request: web.Request) -> web.Response:
-    return web.json_response({"configured": bool(_load_quark_cookie())})
+    return web.json_response({
+        "configured": bool(_load_quark_cookie()),
+        "libraries": [
+            {"name": library["name"], "url": library["url"], "share_id": library["share_id"]}
+            for library in QUARK_MODEL_LIBRARIES
+        ],
+    })
+
+
+@PromptServer.instance.routes.post("/findmodels/quark-libraries/check")
+async def check_quark_libraries(request: web.Request) -> web.Response:
+    results = []
+    async with aiohttp.ClientSession(timeout=SOURCE_TIMEOUT, trust_env=True) as session:
+        for library in QUARK_MODEL_LIBRARIES:
+            token_data = await _quark_json(
+                session,
+                "POST",
+                "/share/sharepage/token?pr=ucpro&fr=pc&uc_param_str=",
+                share_id=library["share_id"],
+                data={"pwd_id": library["share_id"], "passcode": ""},
+            )
+            results.append({
+                "name": library["name"],
+                "url": library["url"],
+                "reachable": bool(((token_data or {}).get("data") or {}).get("stoken")),
+            })
+    return web.json_response({"libraries": results, "configured": bool(_load_quark_cookie())})
 
 
 @PromptServer.instance.routes.post("/findmodels/quark-auth")
@@ -901,7 +976,7 @@ async def install_node_plugin(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text="插件不在工作流 aux_id 或 ComfyUI-Manager 官方映射的可信结果中")
     try:
         result = await asyncio.to_thread(
-            install_market_plugin, folder_paths, candidate, install_dependencies
+            install_plugin, folder_paths, candidate, install_dependencies
         )
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         raise web.HTTPBadRequest(text=str(error)) from error
@@ -928,7 +1003,11 @@ async def find_sources(request: web.Request) -> web.Response:
     quark = [candidate for result in quark_results for candidate in result]
     exact_web = [candidate for candidate in civitai + huggingface if _exact_model_name(name, candidate["name"])]
     known = KNOWN_MODEL_SOURCES.get(basename(name).lower())
-    verified_known = [dict(known)] if known else []
+    verified_known = []
+    if known:
+        checked_known = await _validate_web_candidate(session, dict(known))
+        if checked_known:
+            verified_known.append(checked_known)
     exact_quark = [candidate for candidate in quark if _exact_model_name(name, candidate["name"])]
     checked_web = await asyncio.gather(
         *(_validate_web_candidate(session, candidate) for candidate in exact_web),
@@ -944,7 +1023,7 @@ async def find_sources(request: web.Request) -> web.Response:
     exact_candidates.sort(
         key=lambda candidate: (
             -float(candidate.get("confidence") or 0),
-            provider_rank.get(str(candidate.get("provider") or ""), -1),
+            provider_rank.get(str(candidate.get("provider") or ""), 9),
         )
     )
     similar_candidates = sorted(
@@ -1004,7 +1083,7 @@ async def _quark_download_url(session: aiohttp.ClientSession, payload: dict[str,
         "fids": [fid],
         "pwd_id": share_id,
         "stoken": stoken,
-        "fids_token": [fid_token],
+        "fid_token": [fid_token],
     }
     errors = []
     for endpoint in (
@@ -1021,10 +1100,10 @@ async def _quark_download_url(session: aiohttp.ClientSession, payload: dict[str,
     detail = errors[0] if errors else "需要登录或文件超过公开下载大小限制"
     if detail.startswith("31001"):
         detail = "夸克要求登录。请在设置中保存已登录 pan.quark.cn 的 Cookie 后重试"
-    elif detail.startswith("23018") or "token" in detail.lower():
+    elif detail.startswith("41020") or "token校验" in detail.lower():
         detail = "夸克文件 token 校验失败，插件已重新读取分享目录但服务端仍拒绝"
-    if "download file size limit" in detail.lower():
-        detail = "夸克限制该大文件通过公开分享直链下载，需要在夸克客户端登录并转存后下载"
+    elif detail.startswith("23018") or "download file size limit" in detail.lower():
+        detail = "夸克限制该大文件通过公开分享直链下载；请在设置中保存有效登录 Cookie 后重试，或使用已验证的同名备用来源"
     raise web.HTTPBadGateway(text=f"夸克拒绝直链下载：{detail}")
 
 
@@ -1266,16 +1345,6 @@ async def download_model_jobs(request: web.Request) -> web.Response:
     return web.json_response({"jobs": [_public_download_job(job) for job in jobs]})
 
 
-@PromptServer.instance.routes.post("/findmodels/download/progress")
-async def download_model_progress(request: web.Request) -> web.Response:
-    payload = await request.json()
-    job_id = str(payload.get("job_id", "")).strip()
-    job = DOWNLOAD_JOBS.get(job_id)
-    if not job:
-        raise web.HTTPNotFound(text="Download task not found")
-    return web.json_response(_public_download_job(job))
-
-
 @PromptServer.instance.routes.post("/findmodels/download/pause")
 async def pause_download_model(request: web.Request) -> web.Response:
     job_id = str((await request.json()).get("job_id", "")).strip()
@@ -1323,8 +1392,3 @@ async def cancel_download_model(request: web.Request) -> web.Response:
             temp_path.unlink()
     job.update(downloaded=0, updated_at=time.time())
     return web.json_response(_public_download_job(job))
-
-
-@PromptServer.instance.routes.post("/findmodels/download")
-async def download_model(request: web.Request) -> web.Response:
-    return web.json_response(await _download_model_payload(await request.json()))

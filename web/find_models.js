@@ -7,7 +7,6 @@ let toolbarObserver = null;
 let downloadMonitor = null;
 let workflowMonitor = null;
 let activeTab = "models";
-let panelUserOpened = false;
 let lastWorkflowSignature = "";
 let scanRequestId = 0;
 let scanTimer = null;
@@ -206,7 +205,10 @@ function workflowSnapshot() {
             model_selector: isModelSelector,
             model_value_valid: modelValueValid,
             asset_selector: isAsset,
-            directory: modelMetadata?.directory,
+            directory: modelMetadata?.directory
+              || widget.options?.directory
+              || widget.options?.folder
+              || widget.options?.model_folder,
             source_url: modelMetadata?.url,
             source_hash: modelMetadata?.hash,
             source_hash_type: modelMetadata?.hash_type,
@@ -240,7 +242,7 @@ function removeResolvedModel(name) {
   resolvedModels.add(normalized);
   lastResult.models = lastResult.models.filter((model) => normalizedModelValue(model.name) !== normalized);
   lastResult.summary = { ...lastResult.summary, unresolved: lastResult.models.length };
-  render(lastResult, true);
+  render(lastResult);
   observedWorkflowSignature = workflowSignature(workflowSnapshot());
 }
 
@@ -297,7 +299,9 @@ function downloadJobsHtml(jobs, nodeJobs = [...nodeActivities.values()]) {
   const pluginJobs = nodeJobs.map((job) => `
     <div class="fm-download-job fm-download-${escapeHtml(job.status)}">
       <span class="fm-job-kind fm-job-node">节点</span>
-      <div class="fm-download-job-info"><strong>${escapeHtml(job.title)}</strong><span>${escapeHtml(job.message)}</span></div>
+      <div class="fm-download-job-info"><strong>${escapeHtml(job.title)}</strong><span>${escapeHtml(job.message)}</span>
+        <div class="fm-install-progress ${job.status === "downloading" ? "active" : ""}"><i style="width:${Math.max(0, Math.min(100, Number(job.progress) || 0))}%"></i></div>
+      </div>
     </div>`).join("");
   return `<section class="fm-download-jobs">${modelJobs}${pluginJobs}</section>`;
 }
@@ -443,7 +447,7 @@ function externalCandidatesHtml(model) {
   return `<div class="fm-external-candidates">${candidates.map((item) => `
     <div class="fm-source fm-external-source">
       <span>外部模型库 · ${escapeHtml(item.path)} · ${formatSize(item.size)}</span>
-      ${model.category === "unknown" ? '<span class="fm-target-warning">工作流未提供模型目录，不能自动剪切</span>' : `<button data-external-move="${escapeHtml(item.path)}"
+      ${model.category === "unknown" ? '<span class="fm-target-warning">未能从节点注册信息或外部目录识别官方模型分类，请检查该节点插件的模型目录注册。</span>' : `<button class="fm-external-move" data-external-move="${escapeHtml(item.path)}"
         data-name="${escapeHtml(model.name)}" data-category="${escapeHtml(model.category)}"
         data-node-id="${escapeHtml(model.node_id)}" data-widget="${escapeHtml(model.widget)}">
         剪切到模型目录
@@ -459,16 +463,17 @@ function referenceText(model) {
 function modelCardHtml(model) {
   try {
     const confidence = Number(model.match?.confidence);
+    const exactLocalMatch = model.match?.reason === "exact_filename" && confidence >= 0.99;
     return `
       <article class="fm-item fm-model-card fm-${escapeHtml(model.status || "missing")}">
         <div class="fm-item-title"><span class="fm-status-icon">${model.status === "missing" ? "!" : "↻"}</span><strong title="${escapeHtml(model.name)}">${escapeHtml(model.name)}</strong><button class="fm-copy-name" data-copy-model-name="${escapeHtml(model.name)}" title="复制模型名称">⧉</button></div>
         <div class="fm-meta"><span class="fm-badge">${escapeHtml(model.category || "unknown")}</span><span>${escapeHtml(model.official_missing ? "工作流总览判定缺失" : statusText(model.status))}</span><span>${referenceText(model)}</span><span data-model-size>大小：${formatSize(model.size)}</span></div>
-        ${model.match ? `<div class="fm-match">本地精确候选：${escapeHtml(model.match.name)} (${Number.isFinite(confidence) ? Math.round(confidence * 100) : 0}%)</div>` : ""}
+        ${exactLocalMatch ? `<div class="fm-match">本地模型候选：${escapeHtml(model.match.name)} (99%)</div>` : ""}
         ${externalCandidatesHtml(model)}
         <div class="fm-sources">${officialSourceHtml(model)}</div>
         <div class="fm-item-actions fm-model-actions">
           ${model.node_id ? `<button data-locate-node="${escapeHtml(model.node_id)}">定位引用节点</button>` : ""}
-          ${model.match?.auto_apply ? `<button class="fm-local-load" data-apply="${escapeHtml(model.node_id)}:${escapeHtml(model.widget)}">加载本地模型</button>` : '<button class="fm-local-load" disabled title="本地尚未找到完全匹配的模型">加载本地模型</button>'}
+          ${exactLocalMatch && model.match?.auto_apply ? `<button class="fm-local-load" data-apply="${escapeHtml(model.node_id)}:${escapeHtml(model.widget)}">加载本地模型</button>` : ""}
           <button data-source="${escapeHtml(model.name)}">查找下载来源</button>
         </div>
       </article>`;
@@ -643,8 +648,9 @@ function ensurePanel() {
   if (Number.isFinite(savedWidth) && savedWidth >= 420) panel.style.width = `${savedWidth}px`;
   enablePanelResize(panel);
   panel.querySelector('[data-tab-panel="settings"]')?.insertAdjacentHTML("beforeend", `
-    <div class="fm-settings-card"><strong>夸克链接</strong><span>查找下载来源时后台精确搜索以下模型库；公开分享大文件受限时会优先回退到可验证的快速直链。</span>
-      <div class="fm-quark-links"><a href="https://pan.quark.cn/s/fb913d649b18" target="_blank" rel="noopener noreferrer">https://pan.quark.cn/s/fb913d649b18</a><a href="https://pan.quark.cn/s/4680ac866516" target="_blank" rel="noopener noreferrer">https://pan.quark.cn/s/4680ac866516</a></div>
+    <div class="fm-settings-card"><strong>夸克模型库</strong><span>“查找下载来源”会分页递归到分享目录最深层，并只下载文件名完全一致的模型。公开分享的大文件可能要求有效登录 Cookie。</span>
+      <div class="fm-quark-libraries" data-quark-libraries><span>正在读取分享库状态…</span></div>
+      <button data-action="check-quark-libraries">检测分享链接</button>
       <div class="fm-quark-auth-config">
         <input data-quark-cookie type="password" placeholder="可选：夸克登录 Cookie（仅保存在本机）">
         <button data-action="save-quark-cookie">保存</button>
@@ -652,7 +658,16 @@ function ensurePanel() {
       </div>
       <span data-quark-auth-status>正在检查夸克登录态...</span>
     </div>`);
+  const renderQuarkLibraries = (result) => {
+    const libraries = panel.querySelector("[data-quark-libraries]");
+    if (libraries) libraries.innerHTML = (result.libraries || []).map((library) => `
+      <div class="fm-quark-library">
+        <div><strong>${escapeHtml(library.name)}</strong><a href="${escapeHtml(library.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(library.url)}</a></div>
+        <span class="${library.reachable === false ? "failed" : "ready"}">${library.reachable === false ? "连接失败" : library.reachable === true ? "连接正常" : "已配置"}</span>
+      </div>`).join("");
+  };
   get("/findmodels/quark-auth").then((result) => {
+    renderQuarkLibraries(result);
     const status = panel.querySelector("[data-quark-auth-status]");
     if (status) status.textContent = result.configured ? "已保存夸克登录态，可重试直链下载。" : "未保存夸克登录态，公开分享大文件可能被夸克限制。";
   }).catch(() => {});
@@ -661,7 +676,6 @@ function ensurePanel() {
   });
   setActiveTab(panel, activeTab);
   panel.querySelector('[data-action="close"]').onclick = () => {
-    panelUserOpened = false;
     closeDockedPanel(panel);
   };
   panel.querySelectorAll('[data-action="scan"]').forEach((button) => {
@@ -678,7 +692,7 @@ function ensurePanel() {
       const nodeType = nodePackage.node_types?.[0] || "";
       const packageId = nodePackage.known ? nodePackage.id : "";
       const activityId = packageId || nodeType;
-      nodeActivities.set(activityId, { title: nodePackage.title, status: "downloading", message: "正在查找可信插件来源…" });
+      nodeActivities.set(activityId, { title: nodePackage.title, status: "downloading", progress: 15, message: "正在查找可信插件来源…" });
       await refreshDownloadJobs();
       button.textContent = `正在查找 ${nodePackage.title}…`;
       try {
@@ -692,7 +706,7 @@ function ensurePanel() {
         ].includes(item.reason));
         if (!candidate) throw new Error("没有找到由工作流 aux_id 或 ComfyUI-Manager 官方映射确认的 GitHub 仓库");
         button.textContent = `正在安装 ${nodePackage.title}…`;
-        nodeActivities.set(activityId, { title: nodePackage.title, status: "downloading", message: "正在检查依赖并安装…" });
+        nodeActivities.set(activityId, { title: nodePackage.title, status: "downloading", progress: 55, message: "正在检查 requirements.txt、依赖冲突并安装…" });
         await refreshDownloadJobs();
         await post("/findnodes/install", {
           node_type: nodeType,
@@ -701,10 +715,10 @@ function ensurePanel() {
           install_dependencies: installDependenciesEnabled(panel),
         });
         resolvedNodePackages.add(activityId);
-        nodeActivities.set(activityId, { title: nodePackage.title, status: "completed", message: "安装完成，重启 ComfyUI 后生效" });
+        nodeActivities.set(activityId, { title: nodePackage.title, status: "completed", progress: 100, message: "安装完成，重启 ComfyUI 后生效" });
         installed += 1;
       } catch (error) {
-        nodeActivities.set(activityId, { title: nodePackage.title, status: "failed", message: `安装失败：${error.message}` });
+        nodeActivities.set(activityId, { title: nodePackage.title, status: "failed", progress: 100, message: `安装失败：${error.message}` });
         failures.push(`${nodePackage.title}: ${error.message}`);
       }
       await refreshDownloadJobs();
@@ -714,7 +728,7 @@ function ensurePanel() {
     panel.querySelector(".fm-summary").textContent =
       `已安装或更新 ${installed} 个精确匹配插件。${failures.length ? `失败 ${failures.length} 个：${failures.join("；")}` : "请重启 ComfyUI。"}`
     if (installed) {
-      render(lastResult, true);
+      render(lastResult);
       scheduleScan(0, true);
     }
   };
@@ -748,6 +762,9 @@ function ensurePanel() {
     }
     button.disabled = true;
     button.textContent = "正在安装…";
+    const activityId = input.value.trim();
+    nodeActivities.set(activityId, { title: activityId, status: "downloading", progress: 45, message: "正在克隆仓库并检查 requirements.txt…" });
+    await refreshDownloadJobs();
     try {
       const result = await post("/findnodes/install", {
         node_type: nodeType,
@@ -756,13 +773,32 @@ function ensurePanel() {
         install_dependencies: installDependenciesEnabled(panel),
       });
       input.value = "";
+      nodeActivities.set(activityId, { title: result.title, status: "completed", progress: 100, message: "安装完成，重启 ComfyUI 后生效" });
       panel.querySelector(".fm-summary").textContent = `${result.title} 已安装，请重启 ComfyUI。`;
       await refreshDownloadJobs();
     } catch (error) {
+      nodeActivities.set(activityId, { title: activityId, status: "failed", progress: 100, message: `安装失败：${error.message}` });
       panel.querySelector(".fm-summary").textContent = `GitHub 插件安装失败：${error.message}`;
     } finally {
       button.disabled = false;
       button.textContent = "链接安装插件";
+    }
+  };
+  panel.querySelector('[data-action="check-quark-libraries"]').onclick = async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "正在检测…";
+    try {
+      const result = await post("/findmodels/quark-libraries/check", {});
+      renderQuarkLibraries(result);
+      panel.querySelector("[data-quark-auth-status]").textContent = result.configured
+        ? "分享链接可用性已刷新；已配置登录 Cookie。"
+        : "分享链接可用性已刷新；大文件直链仍可能要求登录 Cookie。";
+    } catch (error) {
+      panel.querySelector("[data-quark-auth-status]").textContent = `检测夸克分享链接失败：${error.message}`;
+    } finally {
+      button.disabled = false;
+      button.textContent = "检测分享链接";
     }
   };
   panel.querySelector('[data-action="save-quark-cookie"]').onclick = async () => {
@@ -904,8 +940,11 @@ function ensurePanel() {
 
     const installButton = event.target.closest("[data-node-install]");
     if (installButton) {
+      const activityId = installButton.dataset.packageId || installButton.dataset.nodeType;
       installButton.disabled = true;
       installButton.textContent = "正在检查依赖并安装…";
+      nodeActivities.set(activityId, { title: activityId, status: "downloading", progress: 50, message: "正在检查 requirements.txt、依赖冲突并安装…" });
+      await refreshDownloadJobs();
       try {
         const result = await post("/findnodes/install", {
           node_type: installButton.dataset.nodeType,
@@ -913,11 +952,11 @@ function ensurePanel() {
           plugin_id: installButton.dataset.nodeInstall,
           install_dependencies: installDependenciesEnabled(panel),
         });
-        const activityId = installButton.dataset.packageId || installButton.dataset.nodeType;
         resolvedNodePackages.add(activityId);
         nodeActivities.set(activityId, {
           title: result.title,
           status: "completed",
+          progress: 100,
           message: "安装完成，重启 ComfyUI 后生效",
         });
         installButton.textContent = result.action === "updated" ? "更新完成，需重启" : "安装完成，需重启";
@@ -926,9 +965,11 @@ function ensurePanel() {
           + `${result.new_conflicts?.length ? `发现 ${result.new_conflicts.length} 个新增依赖冲突，请查看终端。` : "未发现新增依赖冲突。"}`
           + "请重启 ComfyUI。";
         await refreshDownloadJobs();
-        render(lastResult, true);
+        render(lastResult);
         scheduleScan(0, true);
       } catch (error) {
+        nodeActivities.set(activityId, { title: activityId, status: "failed", progress: 100, message: `安装失败：${error.message}` });
+        await refreshDownloadJobs();
         installButton.disabled = false;
         installButton.textContent = "安装失败，重试";
         panel.querySelector(".fm-summary").textContent = `插件安装已停止：${error.message}`;
@@ -995,7 +1036,7 @@ function ensurePanel() {
   return panel;
 }
 
-function render(result, quiet) {
+function render(result) {
   const panel = ensurePanel();
   result.models = (result.models || []).filter((model) => !resolvedModels.has(normalizedModelValue(model.name)));
   result.summary = { ...result.summary, unresolved: result.models.length };
@@ -1067,7 +1108,7 @@ async function scan(quiet = false, { quick = false } = {}) {
     const result = await post("/findmodels/scan", { ...snapshot, quick });
     if (requestId !== scanRequestId || signature !== workflowSignature(workflowSnapshot())) return;
     lastWorkflowSignature = signature;
-    render(result, quiet);
+    render(result);
     if (quick) scheduleEnrichedScan();
   } catch (error) {
     if (requestId !== scanRequestId) return;
@@ -1147,7 +1188,6 @@ function mountToolbarButton() {
     document.body.appendChild(existing);
   }
   existing.onclick = async () => {
-    panelUserOpened = true;
     const panel = ensurePanel();
     if (panel.classList.contains("open")) {
       scan(true, { quick: true });
@@ -1192,7 +1232,6 @@ app.registerExtension({
     style.href = new URL("./find_models.css", import.meta.url).href;
     document.head.appendChild(style);
     ensurePanel();
-    panelUserOpened = false;
     ensurePanel().classList.remove("open");
     watchTopToolbar();
     startDownloadMonitor();

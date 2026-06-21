@@ -43,10 +43,12 @@ from ComfyUI_FindModels.find_models import (
     _external_model_index,
     _external_model_index_for_names,
     _registered_model_extensions,
+    _resolve_model_category,
     _is_model_payload,
     _move_external_model,
     _official_relative_model_name,
     _public_download_job,
+    _quark_candidates,
     _load_quark_cookie,
     _quark_download_url,
     _quark_token,
@@ -163,6 +165,26 @@ class DownloadHelperTests(unittest.TestCase):
         finally:
             folder_paths.get_folder_paths = original
 
+    def test_unknown_model_category_uses_exact_external_official_folder_hint(self):
+        category = _resolve_model_category(
+            {"name": "model.bin", "category": "unknown", "node_type": "CustomLoader", "widget": "model"},
+            [{"path": "models/audio_encoders/model.bin", "category_hint": "audio_encoders"}],
+        )
+        self.assertEqual(category, "audio_encoders")
+
+    def test_unknown_model_category_uses_exact_local_candidate_registration(self):
+        category = _resolve_model_category(
+            {
+                "name": "model.bin",
+                "category": "unknown",
+                "node_type": "CustomLoader",
+                "widget": "model",
+                "match": {"name": "model.bin", "category": "audio_encoders"},
+            },
+            [],
+        )
+        self.assertEqual(category, "audio_encoders")
+
     def test_supports_legacy_comfyui_folder_aliases(self):
         original = folder_paths.get_folder_paths
         folder_paths.get_folder_paths = lambda category: [] if category == "text_encoders" else [str(Path.cwd() / "models" / category)]
@@ -179,8 +201,10 @@ class DownloadHelperTests(unittest.TestCase):
 
     def test_contains_requested_quark_libraries(self):
         urls = [item["url"] for item in QUARK_MODEL_LIBRARIES]
-        self.assertIn("https://pan.quark.cn/s/fb913d649b18", urls)
-        self.assertIn("https://pan.quark.cn/s/4680ac866516", urls)
+        self.assertEqual(urls, [
+            "https://pan.quark.cn/s/fb913d649b18",
+            "https://pan.quark.cn/s/4680ac866516",
+        ])
 
     def test_quark_download_uses_refreshed_singular_fid_token(self):
         calls = []
@@ -215,8 +239,38 @@ class DownloadHelperTests(unittest.TestCase):
         self.assertEqual(url, "https://download.uc.cn/model.safetensors")
         download_payload = calls[-1][2]
         self.assertEqual(download_payload["fids"], ["fresh-fid"])
-        self.assertNotIn("fid_token", download_payload)
-        self.assertEqual(download_payload["fids_token"], ["fresh-token"])
+        self.assertNotIn("fids_token", download_payload)
+        self.assertEqual(download_payload["fid_token"], ["fresh-token"])
+
+    def test_quark_search_recurses_and_paginates_until_exact_file(self):
+        calls = []
+
+        async def fake_quark_json(session, method, path, *, share_id, data=None):
+            calls.append(path)
+            if "sharepage/token" in path:
+                return {"data": {"stoken": "token"}}
+            if "pdir_fid=0" in path:
+                return {"data": {"list": [{"dir": True, "fid": "nested", "file_name": "models"}]}}
+            if "_page=1" in path:
+                return {"data": {"list": [
+                    {"dir": False, "fid": str(index), "file_name": f"other-{index}.safetensors", "share_fid_token": "x"}
+                    for index in range(200)
+                ]}}
+            return {"data": {"list": [{
+                "dir": False,
+                "fid": "wanted",
+                "file_name": "MODEL.SAFETENSORS",
+                "share_fid_token": "wanted-token",
+                "size": 2048,
+            }]}}
+
+        library = {"name": "Quark", "share_id": "share", "url": "https://pan.quark.cn/s/share"}
+        with patch("ComfyUI_FindModels.find_models._quark_json", side_effect=fake_quark_json):
+            result = asyncio.run(_quark_candidates(None, "model.safetensors", "unknown", library))
+
+        self.assertEqual(result[-1]["name"], "MODEL.SAFETENSORS")
+        self.assertEqual(result[-1]["confidence"], 1.0)
+        self.assertTrue(any("_page=2" in path for path in calls))
 
     def test_saves_and_clears_quark_cookie_locally(self):
         with tempfile.TemporaryDirectory() as directory:

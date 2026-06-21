@@ -300,7 +300,7 @@ def _existing_repo(custom_nodes: Path, repo_url: str, git: str, env: dict[str, s
     return None
 
 
-def install_market_plugin(
+def install_plugin(
     folder_paths_module: Any,
     candidate: dict[str, Any],
     install_dependencies: bool = True,

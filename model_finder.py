@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from pathlib import PurePosixPath
 from typing import Any, Callable, Iterable
 
@@ -87,7 +85,7 @@ CATEGORY_HINTS = (
     ("ultralytics_segm", ("ultralytics_segm", "ultralytics segm", "segm_", "segm/")),
     ("ultralytics_bbox", ("ultralytics_bbox", "ultralytics bbox", "bbox_", "bbox/")),
     ("sams", ("samloader", "sam_loader", "sam loader", "sam_model", "sam model")),
-    ("diffusion_models", ("fantasytalking", "fantasyportrait", "infinitetalk")),
+    ("diffusion_models", ("fantasytalking", "fantasyportrait", "infinitetalk", "scail")),
     ("detection", ("detection", "detector", "vitpose", "yolo")),
     ("frame_interpolation", ("rife", "frame_interpolation", "frame interpolation", "film")),
     ("audio_encoders", ("audio_encoder", "audio encoder", "wav2vec", "whisper")),
@@ -187,11 +185,6 @@ def normalize_path(value: str) -> str:
 
 def basename(value: str) -> str:
     return PurePosixPath(normalize_path(value)).name
-
-
-def model_name_key(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", basename(value)).casefold()
-    return "".join(char for char in normalized if char.isalnum())
 
 
 def is_model_name(value: str) -> bool:
@@ -401,56 +394,29 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
     candidates = [(category, name) for category in categories for name in installed.get(category, [])]
     wanted_path = normalize_path(reference.name).lower()
     wanted_base = basename(reference.name).lower()
-    wanted_key = model_name_key(reference.name)
-    wanted_stem = normalized_stem(reference.name)
-
-    best: tuple[float, str, str, str] | None = None
+    exact_filename: tuple[str, str] | None = None
     for category, candidate in candidates:
         candidate_path = normalize_path(candidate)
         candidate_base = basename(candidate_path)
         if candidate_path.lower() == wanted_path:
-            score, reason = 1.0, "exact_path"
-        elif candidate_base.lower() == wanted_base:
-            score, reason = 0.99, "exact_filename"
-        elif wanted_key and model_name_key(candidate_path) == wanted_key:
-            score, reason = 0.985, "equivalent_filename"
-        elif wanted_stem and normalized_stem(candidate_path) == wanted_stem:
-            score, reason = 0.96, "normalized_filename"
-        else:
-            score = SequenceMatcher(None, wanted_stem, normalized_stem(candidate_path)).ratio()
-            reason = "similar_filename"
-        if best is None or score > best[0]:
-            best = (score, candidate_path, category, reason)
+            return {"status": "installed", "match": None}
+        if exact_filename is None and candidate_base.lower() == wanted_base:
+            exact_filename = (candidate_path, category)
 
-    if best is None or best[0] < 0.62:
+    if exact_filename is None:
         if not reference.strict:
             return {"status": "external", "match": None}
         return {"status": "missing", "match": None}
 
-    score, name, category, reason = best
-    status = (
-        "installed"
-        if reason == "exact_path" or (reason in {"exact_filename", "equivalent_filename"} and not reference.official_missing)
-        else "missing"
-        if reference.official_missing
-        and reason not in {"exact_filename", "equivalent_filename"}
-        else "adaptable"
-        if score >= 0.78
-        else "missing"
-    )
+    name, category = exact_filename
     return {
-        "status": status,
+        "status": "adaptable",
         "match": {
             "name": name,
             "category": category,
-            "confidence": round(score, 3),
-            "reason": reason,
-            "auto_apply": (
-                score >= 0.86
-                and reference.node_id is not None
-                and reason != "exact_path"
-                and status in {"adaptable", "missing"}
-            ),
+            "confidence": 0.99,
+            "reason": "exact_filename",
+            "auto_apply": reference.node_id is not None,
         },
     }
 

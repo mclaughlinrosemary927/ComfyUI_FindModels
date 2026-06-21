@@ -85,7 +85,7 @@ class NodeInstallerTests(unittest.TestCase):
             (path / "requirements.txt").write_text("torch>=2.0\nrequests\n", encoding="utf-8")
             self.assertTrue(any("核心运行依赖" in item for item in dependency_conflicts(path)))
 
-    def test_blocks_market_core_runtime_dependency_changes(self):
+    def test_blocks_declared_core_runtime_dependency_changes(self):
         self.assertTrue(declared_dependency_conflicts(["xformers>=0.0.30"]))
         self.assertFalse(declared_dependency_conflicts(["torch"]))
 

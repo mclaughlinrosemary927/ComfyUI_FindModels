@@ -60,7 +60,7 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(refs[0].widget, "lora_name")
         self.assertEqual(refs[0].category, "loras")
 
-    def test_analyze_exact_and_adaptable(self):
+    def test_similar_filename_is_missing_without_local_candidate(self):
         payload = {
             "nodes": [
                 {"id": 1, "type": "CheckpointLoaderSimple", "widgets": [{"name": "ckpt_name", "value": "sdxl/base/model-v1.safetensors"}]},
@@ -69,21 +69,23 @@ class ModelFinderTests(unittest.TestCase):
         }
         result = analyze(payload, lambda category: FILES.get(category, []))
         self.assertEqual(result["summary"]["installed"], 1)
-        self.assertEqual(result["summary"]["adaptable"], 1)
+        self.assertEqual(result["summary"]["adaptable"], 0)
+        self.assertEqual(result["summary"]["missing"], 1)
         self.assertEqual(result["summary"]["unresolved"], 1)
         self.assertEqual(len(result["models"]), 1)
-        self.assertTrue(result["models"][0]["match"]["auto_apply"])
+        self.assertIsNone(result["models"][0]["match"])
 
-    def test_exact_filename_in_official_category_is_installed(self):
+    def test_exact_filename_with_different_registered_path_is_adaptable(self):
         payload = {
             "nodes": [
                 {"id": 4, "type": "CheckpointLoaderSimple", "widgets": [{"name": "ckpt_name", "value": "model-v1.safetensors"}]},
             ]
         }
         result = analyze(payload, lambda category: FILES.get(category, []))
-        self.assertEqual(result["summary"]["installed"], 1)
-        self.assertEqual(result["summary"]["unresolved"], 0)
-        self.assertEqual(result["models"], [])
+        self.assertEqual(result["summary"]["adaptable"], 1)
+        self.assertEqual(result["summary"]["unresolved"], 1)
+        self.assertEqual(result["models"][0]["match"]["reason"], "exact_filename")
+        self.assertEqual(result["models"][0]["match"]["confidence"], 0.99)
 
     def test_hides_installed_models(self):
         payload = {
@@ -203,6 +205,22 @@ class ModelFinderTests(unittest.TestCase):
         result = analyze(payload, lambda category: [])
         self.assertEqual(result["models"][0]["category"], "diffusion_models")
 
+    def test_scail_checkpoint_uses_wanvideo_diffusion_models_folder(self):
+        payload = {
+            "nodes": [{
+                "id": 121,
+                "type": "Custom Model Loader",
+                "widgets": [{
+                    "name": "model",
+                    "value": "wan2.1_14B_SCAIL_2_fp8_scaled.safetensors",
+                    "model_selector": True,
+                    "model_value_valid": False,
+                }],
+            }]
+        }
+        model = analyze(payload, lambda category: [])["models"][0]
+        self.assertEqual(model["category"], "diffusion_models")
+
     def test_llama_cpp_models_use_official_uppercase_llm_folder(self):
         payload = {
             "nodes": [{
@@ -290,8 +308,8 @@ class ModelFinderTests(unittest.TestCase):
             payload,
             lambda category: ["Wan/Wan14Bi2vFusioniX_fp8.safetensors"] if category == "diffusion_models" else [],
         )
-        self.assertEqual(result["summary"]["installed"], 1)
-        self.assertEqual(result["models"], [])
+        self.assertEqual(result["summary"]["adaptable"], 1)
+        self.assertEqual(result["models"][0]["match"]["name"], "Wan/Wan14Bi2vFusioniX_fp8.safetensors")
 
     def test_extracts_model_filename_nested_in_custom_widget_value(self):
         payload = {
@@ -320,8 +338,8 @@ class ModelFinderTests(unittest.TestCase):
             payload,
             lambda category: ["Wan2_1_VAE_bf16.safetensors"] if category == "vae" else [],
         )
-        self.assertEqual(result["summary"]["installed"], 1)
-        self.assertEqual(result["models"], [])
+        self.assertEqual(result["summary"]["adaptable"], 1)
+        self.assertEqual(result["models"][0]["match"]["name"], "Wan2_1_VAE_bf16.safetensors")
 
     def test_official_combo_missing_hides_when_registered_path_is_already_exact(self):
         payload = {
@@ -416,8 +434,9 @@ class ModelFinderTests(unittest.TestCase):
             payload,
             lambda category: ["Other/model.safetensors"] if category == "diffusion_models" else [],
         )
-        self.assertEqual(result["summary"]["unresolved"], 0)
-        self.assertEqual(result["models"], [])
+        self.assertEqual(result["summary"]["unresolved"], 1)
+        self.assertEqual(result["models"][0]["status"], "adaptable")
+        self.assertEqual(result["models"][0]["match"]["name"], "Other/model.safetensors")
 
     def test_official_flat_model_can_replace_invalid_legacy_prefix(self):
         payload = {
@@ -563,7 +582,7 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(result["models"], [])
         self.assertEqual(result["summary"]["installed"], 1)
 
-    def test_unicode_lora_punctuation_variant_is_adaptable(self):
+    def test_unicode_lora_punctuation_variant_is_not_a_local_candidate(self):
         workflow_name = "Qwen/任务拆解二次元， .safetensors"
         installed_name = "Qwen/任务拆解二次元,.safetensors"
         payload = {
@@ -579,9 +598,26 @@ class ModelFinderTests(unittest.TestCase):
             }]
         }
         model = analyze(payload, lambda category: [installed_name] if category == "loras" else [])["models"][0]
+        self.assertEqual(model["status"], "missing")
+        self.assertIsNone(model["match"])
+
+    def test_exact_filename_match_is_case_insensitive(self):
+        payload = {
+            "nodes": [{
+                "id": 43,
+                "type": "LoraLoaderModelOnly",
+                "widgets": [{
+                    "name": "lora_name",
+                    "value": "old/MODEL.SAFETENSORS",
+                    "model_selector": True,
+                    "model_value_valid": False,
+                }],
+            }]
+        }
+        model = analyze(payload, lambda category: ["new/model.safetensors"] if category == "loras" else [])["models"][0]
         self.assertEqual(model["status"], "adaptable")
-        self.assertEqual(model["match"]["name"], installed_name)
-        self.assertTrue(model["match"]["auto_apply"])
+        self.assertEqual(model["match"]["name"], "new/model.safetensors")
+        self.assertEqual(model["match"]["confidence"], 0.99)
 
     def test_ignores_inactive_node_models_like_workflow_overview(self):
         payload = {
