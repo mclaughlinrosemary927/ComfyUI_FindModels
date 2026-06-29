@@ -380,6 +380,39 @@ class ModelFinderTests(unittest.TestCase):
         )
         self.assertEqual(result["models"], [])
 
+    def test_official_combo_valid_still_reports_missing_when_file_not_registered(self):
+        payload = {
+            "nodes": [{
+                "id": 400,
+                "type": "UNetLoader",
+                "widgets": [{
+                    "name": "unet_name",
+                    "value": "ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors",
+                    "model_selector": True,
+                    "model_value_valid": True,
+                }],
+            }]
+        }
+        model = analyze(payload, lambda category: [])["models"][0]
+        self.assertEqual(model["status"], "missing")
+        self.assertEqual(model["category"], "diffusion_models")
+
+    def test_ltx_loader_uses_diffusion_models_folder(self):
+        payload = {
+            "nodes": [{
+                "id": 401,
+                "type": "LTX Model Loader",
+                "widgets": [{
+                    "name": "model",
+                    "value": "ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors",
+                    "model_selector": True,
+                    "model_value_valid": False,
+                }],
+            }]
+        }
+        model = analyze(payload, lambda category: [])["models"][0]
+        self.assertEqual(model["category"], "diffusion_models")
+
     def test_scans_official_embedded_node_model_metadata(self):
         payload = {
             "nodes": [{
@@ -669,7 +702,7 @@ class ModelFinderTests(unittest.TestCase):
                 "widgets_values": ["valid.safetensors"],
             }]
         }
-        result = analyze(payload, lambda category: [])
+        result = analyze(payload, lambda category: ["valid.safetensors"] if category == "checkpoints" else [])
         self.assertEqual(result["models"], [])
 
     def test_adapted_installed_model_suppresses_stale_missing_metadata(self):

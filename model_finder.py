@@ -85,7 +85,7 @@ CATEGORY_HINTS = (
     ("ultralytics_segm", ("ultralytics_segm", "ultralytics segm", "segm_", "segm/")),
     ("ultralytics_bbox", ("ultralytics_bbox", "ultralytics bbox", "bbox_", "bbox/")),
     ("sams", ("samloader", "sam_loader", "sam loader", "sam_model", "sam model")),
-    ("diffusion_models", ("fantasytalking", "fantasyportrait", "infinitetalk", "scail")),
+    ("diffusion_models", ("fantasytalking", "fantasyportrait", "infinitetalk", "scail", "ltx", "ltxvideo")),
     ("detection", ("detection", "detector", "vitpose", "yolo")),
     ("frame_interpolation", ("rife", "frame_interpolation", "frame interpolation", "film")),
     ("audio_encoders", ("audio_encoder", "audio encoder", "wav2vec", "whisper")),
@@ -383,8 +383,6 @@ def load_installed(
 
 
 def match_reference(reference: Reference, installed: dict[str, list[str]]) -> dict[str, Any]:
-    if reference.official_valid:
-        return {"status": "installed", "match": None}
     categories = CATEGORY_ALIASES.get(
         reference.category,
         CATEGORY_ALIASES["unknown"] if reference.category == "unknown" else (reference.category,),
