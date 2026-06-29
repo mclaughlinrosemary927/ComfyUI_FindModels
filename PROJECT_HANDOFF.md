@@ -2,7 +2,7 @@
 
 > 更新时间：2026-06-18
 > 当前分支：`main`
-> 当前项目版本：`1.26.1`
+> 当前项目版本：`1.26.2`
 > 上一发布基线：`v1.25.0`
 > 当前状态：代码清理、识别改进和 UI 重构已完成，运行文件已同步到实际 ComfyUI 插件目录
 > 发布约束：只有用户明确要求时才提交或上传 GitHub
@@ -27,7 +27,7 @@
 | GitHub | `https://github.com/mclaughlinrosemary927/ComfyUI_FindModels` |
 | ComfyUI 模型根目录 | `<ComfyUI>/models` |
 | 外部模型库 | 用户在设置页选择，配置文件仅保存在本机 |
-| 最新测试 | `101 tests passed` |
+| 最新测试 | `102 tests passed` |
 
 当前工作区未提交文件：
 
@@ -288,7 +288,7 @@ git status --short
 当前结果：
 
 ```text
-Ran 101 tests
+Ran 102 tests
 OK
 Python compile: passed
 JavaScript syntax: passed

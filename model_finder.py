@@ -221,6 +221,17 @@ def is_explicit_model_widget(value: Any) -> bool:
     return widget_hint in EXPLICIT_MODEL_WIDGETS or any(pattern.fullmatch(widget_hint) for pattern in MODEL_WIDGET_PATTERNS)
 
 
+def is_loader_node_type(node_type: Any) -> bool:
+    raw = str(node_type or "").lower()
+    node_hint = re.sub(r"[^a-z0-9_]+", "", raw)
+    return (
+        "loader" in node_hint
+        or "加载器" in raw
+        or "加载" in raw
+        or any(term in node_hint for term in STANDARD_LOADER_HINTS)
+    )
+
+
 def extract_references(payload: Any, registered_categories: Iterable[str] = ()) -> list[Reference]:
     registered_categories = tuple(registered_categories)
     found: dict[tuple[str, str, str | None, str | None], Reference] = {}
@@ -241,15 +252,13 @@ def extract_references(payload: Any, registered_categories: Iterable[str] = ()) 
     ) -> None:
         if not is_model_name(value):
             return
-        node_hint = re.sub(r"[^a-z0-9_]+", "", str(node_type or "").lower())
         if node_id is not None:
             explicit_widget = is_explicit_model_widget(widget)
             # Custom loaders frequently translate the widget label (for example
             # "模型"), so the file extension plus the loader node type is the
             # reliable signal. Non-loader custom nodes remain excluded.
-            loader_widget = "loader" in node_hint
-            model_node = any(term in node_hint for term in STANDARD_LOADER_HINTS)
-            if not explicit_widget and not loader_widget and not model_node and not model_selector:
+            loader_node = is_loader_node_type(node_type)
+            if not explicit_widget and not loader_node and not model_selector:
                 return
         ref = Reference(
             name=normalize_path(value),
@@ -259,8 +268,7 @@ def extract_references(payload: Any, registered_categories: Iterable[str] = ()) 
             node_type=None if node_type is None else str(node_type),
             strict=model_selector
             or is_explicit_model_widget(widget)
-            or "loader" in node_hint
-            or any(term in node_hint for term in STANDARD_LOADER_HINTS),
+            or is_loader_node_type(node_type),
             official_missing=model_selector and model_value_valid is False,
             official_valid=model_selector and model_value_valid is True,
             source_url=source_url if isinstance(source_url, str) else None,

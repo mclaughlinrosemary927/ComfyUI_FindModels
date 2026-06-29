@@ -1,6 +1,6 @@
 # ComfyUI_FindModels
 
-Current version: `1.26.1`
+Current version: `1.26.2`
 
 `ComfyUI_FindModels` scans the workflow currently open in ComfyUI, identifies model
 references that are missing locally, suggests compatible installed models, and finds

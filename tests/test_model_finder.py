@@ -413,6 +413,23 @@ class ModelFinderTests(unittest.TestCase):
         model = analyze(payload, lambda category: [])["models"][0]
         self.assertEqual(model["category"], "diffusion_models")
 
+    def test_chinese_unet_loader_widgets_values_reports_missing_ltx_model(self):
+        payload = {
+            "nodes": [{
+                "id": 400,
+                "type": "UNet加载器",
+                "widgets": [],
+                "widgets_values": [
+                    "ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors",
+                    "default",
+                ],
+            }]
+        }
+        model = analyze(payload, lambda category: [])["models"][0]
+        self.assertEqual(model["status"], "missing")
+        self.assertEqual(model["category"], "diffusion_models")
+        self.assertEqual(model["node_id"], "400")
+
     def test_scans_official_embedded_node_model_metadata(self):
         payload = {
             "nodes": [{
