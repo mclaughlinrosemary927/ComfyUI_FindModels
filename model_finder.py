@@ -119,7 +119,7 @@ CATEGORY_ALIASES = {
     "controlnet": ("controlnet",),
     "clip_vision": ("clip_vision",),
     "text_encoders": ("text_encoders", "clip"),
-    "diffusion_models": ("diffusion_models", "unet"),
+    "diffusion_models": ("diffusion_models",),
     "upscale_models": ("upscale_models",),
     "embeddings": ("embeddings",),
     "detection": ("detection",),
@@ -148,6 +148,13 @@ CATEGORY_ALIASES = {
         "embeddings",
     ),
 }
+
+OFFICIAL_CATEGORY_ALIASES = {
+    category: (category,)
+    for category in CATEGORY_ALIASES
+    if category != "unknown"
+}
+OFFICIAL_CATEGORY_ALIASES["unknown"] = CATEGORY_ALIASES["unknown"]
 
 
 @dataclass(frozen=True)
@@ -422,6 +429,10 @@ def load_installed(
 
 
 def match_reference(reference: Reference, installed: dict[str, list[str]]) -> dict[str, Any]:
+    official_categories = OFFICIAL_CATEGORY_ALIASES.get(
+        reference.category,
+        CATEGORY_ALIASES["unknown"] if reference.category == "unknown" else (reference.category,),
+    )
     categories = CATEGORY_ALIASES.get(
         reference.category,
         CATEGORY_ALIASES["unknown"] if reference.category == "unknown" else (reference.category,),
@@ -436,7 +447,10 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
         candidate_path = normalize_path(candidate)
         candidate_base = basename(candidate_path)
         if candidate_path.lower() == wanted_path:
-            return {"status": "installed", "match": None}
+            if category in official_categories:
+                return {"status": "installed", "match": None}
+            if exact_filename is None:
+                exact_filename = (candidate_path, category)
         if exact_filename is None and candidate_base.lower() == wanted_base:
             exact_filename = (candidate_path, category)
 

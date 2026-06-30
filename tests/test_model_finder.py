@@ -430,6 +430,62 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(model["category"], "diffusion_models")
         self.assertEqual(model["node_id"], "400")
 
+    def test_diffusion_models_do_not_resolve_from_legacy_unet_folder(self):
+        model_name = "ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors"
+        payload = {
+            "nodes": [{
+                "id": 400,
+                "type": "UNet加载器",
+                "widgets": [{
+                    "name": "unet_name",
+                    "value": model_name,
+                    "model_selector": True,
+                    "model_value_valid": False,
+                }],
+            }]
+        }
+
+        result = analyze(
+            payload,
+            lambda category: [model_name] if category == "unet" else [],
+        )
+
+        self.assertEqual(result["summary"]["unresolved"], 1)
+        self.assertEqual(result["models"][0]["name"], model_name)
+        self.assertEqual(result["models"][0]["category"], "diffusion_models")
+        self.assertEqual(result["models"][0]["status"], "adaptable")
+        self.assertEqual(result["models"][0]["match"]["category"], "unet")
+
+    def test_text_encoders_do_not_resolve_from_legacy_clip_folder(self):
+        model_name = "qwen_3_06b_base.safetensors"
+        payload = {
+            "models": [{
+                "name": model_name,
+                "directory": "text_encoders",
+            }],
+            "nodes": [{
+                "id": 2,
+                "type": "CLIPLoader",
+                "widgets": [{
+                    "name": "clip_name",
+                    "value": model_name,
+                    "model_selector": True,
+                    "model_value_valid": False,
+                    "directory": "text_encoders",
+                }],
+            }],
+        }
+
+        result = analyze(
+            payload,
+            lambda category: [model_name] if category == "clip" else [],
+        )
+
+        self.assertEqual(result["summary"]["unresolved"], 1)
+        self.assertEqual(result["models"][0]["category"], "text_encoders")
+        self.assertEqual(result["models"][0]["status"], "adaptable")
+        self.assertEqual(result["models"][0]["match"]["category"], "clip")
+
     def test_scans_official_embedded_node_model_metadata(self):
         payload = {
             "nodes": [{
