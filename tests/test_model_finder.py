@@ -456,6 +456,30 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(result["models"][0]["status"], "adaptable")
         self.assertEqual(result["models"][0]["match"]["category"], "unet")
 
+    def test_confirmed_unet_selection_keeps_legacy_local_candidate(self):
+        model_name = "ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors"
+        payload = {
+            "nodes": [{
+                "id": 400,
+                "type": "UNet加载器",
+                "widgets": [{
+                    "name": "unet_name",
+                    "value": model_name,
+                    "model_selector": True,
+                    "model_value_valid": True,
+                }],
+            }]
+        }
+
+        result = analyze(
+            payload,
+            lambda category: [model_name] if category == "unet" else [],
+        )
+
+        self.assertEqual(result["summary"]["unresolved"], 1)
+        self.assertEqual(result["models"][0]["status"], "adaptable")
+        self.assertEqual(result["models"][0]["match"]["category"], "unet")
+
     def test_text_encoders_do_not_resolve_from_legacy_clip_folder(self):
         model_name = "qwen_3_06b_base.safetensors"
         payload = {
@@ -471,6 +495,32 @@ class ModelFinderTests(unittest.TestCase):
                     "value": model_name,
                     "model_selector": True,
                     "model_value_valid": False,
+                    "directory": "text_encoders",
+                }],
+            }],
+        }
+
+        result = analyze(
+            payload,
+            lambda category: [model_name] if category == "clip" else [],
+        )
+
+        self.assertEqual(result["summary"]["unresolved"], 1)
+        self.assertEqual(result["models"][0]["category"], "text_encoders")
+        self.assertEqual(result["models"][0]["status"], "adaptable")
+        self.assertEqual(result["models"][0]["match"]["category"], "clip")
+
+    def test_confirmed_text_encoder_selection_keeps_legacy_clip_candidate(self):
+        model_name = "qwen_3_06b_base.safetensors"
+        payload = {
+            "nodes": [{
+                "id": 2,
+                "type": "CLIPLoader",
+                "widgets": [{
+                    "name": "clip_name",
+                    "value": model_name,
+                    "model_selector": True,
+                    "model_value_valid": True,
                     "directory": "text_encoders",
                 }],
             }],

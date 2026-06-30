@@ -437,7 +437,7 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
         reference.category,
         CATEGORY_ALIASES["unknown"] if reference.category == "unknown" else (reference.category,),
     )
-    if reference.official_missing:
+    if reference.official_missing or reference.official_valid:
         categories = tuple(dict.fromkeys((*categories, *CATEGORY_ALIASES["unknown"], *installed.keys())))
     candidates = [(category, name) for category in categories for name in installed.get(category, [])]
     wanted_path = normalize_path(reference.name).lower()
