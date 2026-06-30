@@ -536,6 +536,40 @@ class ModelFinderTests(unittest.TestCase):
         self.assertTrue(all(model["status"] == "adaptable" for model in result["models"]))
         self.assertTrue(all(model["match"]["auto_apply"] for model in result["models"]))
 
+    def test_ltx_lora_name_uses_loras_before_filename_hint(self):
+        payload = {
+            "nodes": [{
+                "id": 113,
+                "type": "LoRA加载器（仅模型）",
+                "widgets": [{
+                    "name": "lora_name",
+                    "value": "LTX2.3_Crisp_Enhance.safetensors",
+                    "model_selector": True,
+                    "model_value_valid": False,
+                }],
+            }]
+        }
+        result = analyze(payload, lambda category: ["LTX2.3_Crisp_Enhance.safetensors"] if category == "loras" else [])
+        self.assertEqual(result["models"], [])
+        self.assertEqual(result["summary"]["installed"], 1)
+
+    def test_ltx_lora_model_widget_uses_loras_before_filename_hint(self):
+        payload = {
+            "nodes": [{
+                "id": 114,
+                "type": "LoRA加载器（仅模型）",
+                "widgets": [{
+                    "name": "model",
+                    "value": "ltx-2.3-22b-ic-lora-refocus.safetensors",
+                    "model_selector": True,
+                    "model_value_valid": False,
+                }],
+            }]
+        }
+        result = analyze(payload, lambda category: ["ltx-2.3-22b-ic-lora-refocus.safetensors"] if category == "loras" else [])
+        self.assertEqual(result["models"], [])
+        self.assertEqual(result["summary"]["installed"], 1)
+
     def test_instantid_model_uses_registered_official_category(self):
         payload = {
             "nodes": [{

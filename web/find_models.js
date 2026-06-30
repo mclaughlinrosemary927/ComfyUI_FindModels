@@ -7,7 +7,6 @@ let toolbarObserver = null;
 let downloadMonitor = null;
 let workflowMonitor = null;
 let activeTab = "models";
-let lastWorkflowSignature = "";
 let scanRequestId = 0;
 let scanTimer = null;
 let enrichTimer = null;
@@ -17,7 +16,6 @@ const resolvedNodePackages = new Set();
 const nodeActivities = new Map();
 const downloadStatuses = new Map();
 const confirmedModelSelections = new Map();
-const resolvedModels = new Set();
 
 function normalizedModelValue(value) {
   return typeof value === "string" ? value.replaceAll("\\", "/").replace(/^\/+/, "") : "";
@@ -217,29 +215,33 @@ function workflowSnapshot() {
         }),
       };
     }) || [];
-  const referencedNames = new Set(nodes.filter((node) => node.active).flatMap((node) => [
-    ...(Array.isArray(node.widgets_values) ? node.widgets_values : Object.values(node.widgets_values || {})),
-    ...node.models.map((model) => model.name),
-  ]).filter((value) => typeof value === "string"));
   return {
-    models: (serializedGraph?.models || []).filter((model) => referencedNames.has(model.name)),
+    models: serializedGraph?.models || [],
     nodes,
   };
 }
 
 function workflowSignature(snapshot) {
-  return JSON.stringify((snapshot.nodes || []).map((node) => [
-    node.id,
-    node.type,
-    node.active,
-    node.widgets_values,
-  ]));
+  return JSON.stringify({
+    nodes: (snapshot.nodes || []).map((node) => [
+      node.id,
+      node.type,
+      node.active,
+      node.widgets_values,
+    ]),
+    models: (snapshot.models || []).map((model) => [
+      model.name,
+      model.directory,
+      model.url,
+      model.hash,
+      model.size,
+    ]),
+  });
 }
 
 function removeResolvedModel(name) {
   if (!lastResult?.models) return;
   const normalized = normalizedModelValue(name);
-  resolvedModels.add(normalized);
   lastResult.models = lastResult.models.filter((model) => normalizedModelValue(model.name) !== normalized);
   lastResult.summary = { ...lastResult.summary, unresolved: lastResult.models.length };
   render(lastResult);
@@ -263,7 +265,6 @@ function startWorkflowMonitor() {
     const signature = workflowSignature(workflowSnapshot());
     if (signature === observedWorkflowSignature) return;
     observedWorkflowSignature = signature;
-    resolvedModels.clear();
     resolvedNodePackages.clear();
     scanRequestId += 1;
     scheduleScan(0, true);
@@ -1038,11 +1039,10 @@ function ensurePanel() {
 
 function render(result) {
   const panel = ensurePanel();
-  result.models = (result.models || []).filter((model) => !resolvedModels.has(normalizedModelValue(model.name)));
+  result.models = result.models || [];
   result.summary = { ...result.summary, unresolved: result.models.length };
   lastResult = result;
   const summary = result.summary;
-  const missingNodes = result.missing_nodes || [];
   const missingNodePackages = (result.missing_node_packages || []).filter((nodePackage) => {
     const nodeType = nodePackage.node_types?.[0] || "";
     return !resolvedNodePackages.has(nodePackage.id) && !resolvedNodePackages.has(nodeType);
@@ -1107,7 +1107,6 @@ async function scan(quiet = false, { quick = false } = {}) {
   try {
     const result = await post("/findmodels/scan", { ...snapshot, quick });
     if (requestId !== scanRequestId || signature !== workflowSignature(workflowSnapshot())) return;
-    lastWorkflowSignature = signature;
     render(result);
     if (quick) scheduleEnrichedScan();
   } catch (error) {
@@ -1240,8 +1239,6 @@ app.registerExtension({
   },
   async afterConfigureGraph() {
     scanRequestId += 1;
-    lastWorkflowSignature = "";
-    resolvedModels.clear();
     resolvedNodePackages.clear();
     scheduleScan(0, true);
   },

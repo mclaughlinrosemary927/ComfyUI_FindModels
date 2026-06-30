@@ -38,20 +38,6 @@ STANDARD_LOADER_HINTS = (
     "upscale",
     "embedding",
 )
-MODEL_WIDGET_HINTS = (
-    "ckpt",
-    "checkpoint",
-    "model",
-    "lora",
-    "vae",
-    "control",
-    "clip",
-    "encoder",
-    "unet",
-    "diffusion",
-    "upscale",
-    "embedding",
-)
 EXPLICIT_MODEL_WIDGETS = (
     "ckpt_name",
     "checkpoint_name",
@@ -70,6 +56,23 @@ EXPLICIT_MODEL_WIDGETS = (
     "upscale_model_name",
     "embedding_name",
 )
+WIDGET_CATEGORY_OVERRIDES = {
+    "ckpt_name": "checkpoints",
+    "checkpoint_name": "checkpoints",
+    "lora_name": "loras",
+    "vae_name": "vae",
+    "control_net_name": "controlnet",
+    "controlnet_name": "controlnet",
+    "clip_vision": "clip_vision",
+    "clip_vision_name": "clip_vision",
+    "text_encoder_name": "text_encoders",
+    "unet_name": "diffusion_models",
+    "diffusion_model": "diffusion_models",
+    "diffusion_model_name": "diffusion_models",
+    "upscale_model": "upscale_models",
+    "upscale_model_name": "upscale_models",
+    "embedding_name": "embeddings",
+}
 MODEL_WIDGET_PATTERNS = (
     re.compile(r"^(?:lora|lycoris)_?\d+$"),
     re.compile(r"^(?:ckpt|checkpoint|vae|controlnet|control_net|clip|clip_vision|text_encoder|unet|diffusion_model|upscale_model)_?\d+$"),
@@ -221,6 +224,30 @@ def is_explicit_model_widget(value: Any) -> bool:
     return widget_hint in EXPLICIT_MODEL_WIDGETS or any(pattern.fullmatch(widget_hint) for pattern in MODEL_WIDGET_PATTERNS)
 
 
+def context_category(widget: Any, node_type: Any) -> str | None:
+    widget_hint = re.sub(r"[^a-z0-9_]+", "", str(widget or "").lower())
+    node_hint = re.sub(r"[^a-z0-9_]+", "", str(node_type or "").lower())
+    if widget_hint in WIDGET_CATEGORY_OVERRIDES:
+        return WIDGET_CATEGORY_OVERRIDES[widget_hint]
+    if re.fullmatch(r"(?:lora|lycoris)_?\d+", widget_hint):
+        return "loras"
+    if "lora" in node_hint or "lycoris" in node_hint:
+        return "loras"
+    if "unet" in node_hint or "diffusion" in node_hint:
+        return "diffusion_models"
+    if "checkpoint" in node_hint or "ckpt" in node_hint:
+        return "checkpoints"
+    if "vae" in node_hint:
+        return "vae"
+    if "controlnet" in node_hint or "control_net" in node_hint:
+        return "controlnet"
+    if "clip_vision" in node_hint:
+        return "clip_vision"
+    if "textencoder" in node_hint or "text_encoder" in node_hint:
+        return "text_encoders"
+    return None
+
+
 def is_loader_node_type(node_type: Any) -> bool:
     raw = str(node_type or "").lower()
     node_hint = re.sub(r"[^a-z0-9_]+", "", raw)
@@ -262,7 +289,11 @@ def extract_references(payload: Any, registered_categories: Iterable[str] = ()) 
                 return
         ref = Reference(
             name=normalize_path(value),
-            category=str(category_override) if isinstance(category_override, str) and category_override else classify(f"{hint} {value}", registered_categories),
+            category=(
+                str(category_override)
+                if isinstance(category_override, str) and category_override
+                else context_category(widget, node_type) or classify(f"{hint} {value}", registered_categories)
+            ),
             node_id=None if node_id is None else str(node_id),
             widget=None if widget is None else str(widget),
             node_type=None if node_type is None else str(node_type),

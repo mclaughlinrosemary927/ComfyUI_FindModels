@@ -32,7 +32,6 @@ from .node_installer import (
 )
 
 
-TIMEOUT = aiohttp.ClientTimeout(total=30)
 SOURCE_TIMEOUT = aiohttp.ClientTimeout(total=120, connect=20, sock_read=30)
 DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=None, connect=30, sock_read=600)
 ALLOWED_DOWNLOAD_HOSTS = {
