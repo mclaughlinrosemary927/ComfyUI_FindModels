@@ -975,6 +975,33 @@ class ModelFinderTests(unittest.TestCase):
         self.assertEqual(result["summary"]["unresolved"], 5)
         self.assertEqual({model["name"] for model in result["models"]}, set(names))
 
+    def test_rgthree_power_lora_nested_values_have_local_candidates(self):
+        payload = {
+            "nodes": [{
+                "id": 56,
+                "type": "Power Lora Loader (rgthree)",
+                "widgets": [{
+                    "name": "loras",
+                    "value": [
+                        {"enabled": True, "lora": "FLUX/Flux2 Klein 9B/klein_9B_Turbo_r128.safetensors", "strength": 0.2},
+                        {"enabled": True, "lora": "FLUX/Flux2 Klein 9B/f2k_9B_lcs_consist_20260415.safetensors", "strength": 1.0},
+                    ],
+                    "model_selector": False,
+                }],
+            }]
+        }
+        installed = [
+            "Flux2 Klein 9B/klein_9B_Turbo_r128.safetensors",
+            "Flux2 Klein 9B/f2k_9B_lcs_consist_20260415.safetensors",
+        ]
+
+        result = analyze(payload, lambda category: installed if category == "loras" else [])
+
+        self.assertEqual(result["summary"]["unresolved"], 2)
+        self.assertTrue(all(model["category"] == "loras" for model in result["models"]))
+        self.assertTrue(all(model["status"] == "adaptable" for model in result["models"]))
+        self.assertEqual({model["match"]["name"] for model in result["models"]}, set(installed))
+
 
 if __name__ == "__main__":
     unittest.main()

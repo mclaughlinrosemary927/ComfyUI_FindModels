@@ -338,15 +338,15 @@ def _node_registered_category(node_type: Any, widget_name: Any) -> str | None:
 
 def _resolve_model_category(model: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
     current_value = str(model.get("category") or "unknown")
+    node_category = _node_registered_category(model.get("node_type"), model.get("widget"))
+    if node_category:
+        return node_category
     current = _registered_category(current_value)
     if current or current_value in DOWNLOAD_CATEGORY_ALIASES:
         return current or current_value
     match_category = _registered_category((model.get("match") or {}).get("category"))
     if match_category:
         return match_category
-    node_category = _node_registered_category(model.get("node_type"), model.get("widget"))
-    if node_category:
-        return node_category
     candidate_categories = {
         category
         for candidate in candidates

@@ -185,6 +185,34 @@ class DownloadHelperTests(unittest.TestCase):
         )
         self.assertEqual(category, "audio_encoders")
 
+    def test_registered_node_category_overrides_generic_clip_guess(self):
+        class ClipLoaderGGUF:
+            @classmethod
+            def INPUT_TYPES(cls):
+                return {"required": {"clip_name": (["Z-Image-Engineer-V6-Q8_0.gguf"],)}}
+
+        nodes = types.ModuleType("nodes")
+        nodes.NODE_CLASS_MAPPINGS = {"CLIPLoader (GGUF)": ClipLoaderGGUF}
+        original_get_filename_list = folder_paths.get_filename_list
+        folder_paths.get_filename_list = lambda category: (
+            ["Z-Image-Engineer-V6-Q8_0.gguf"] if category == "clip" else []
+        )
+        try:
+            with patch.dict(sys.modules, {"nodes": nodes}):
+                category = _resolve_model_category(
+                    {
+                        "name": "Z-Image-Engineer-V6-Q8_0.gguf",
+                        "category": "text_encoders",
+                        "node_type": "CLIPLoader (GGUF)",
+                        "widget": "clip_name",
+                    },
+                    [],
+                )
+        finally:
+            folder_paths.get_filename_list = original_get_filename_list
+
+        self.assertEqual(category, "clip")
+
     def test_supports_legacy_comfyui_folder_aliases(self):
         original = folder_paths.get_folder_paths
         folder_paths.get_folder_paths = lambda category: [] if category == "text_encoders" else [str(Path.cwd() / "models" / category)]

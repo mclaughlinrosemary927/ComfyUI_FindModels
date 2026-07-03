@@ -350,7 +350,57 @@ function findTargetWidget(node, model) {
   const widgets = node?.widgets || [];
   return widgets.find((item) => item.name === model.widget)
     || widgets.find((item) => item.value === model.name)
-    || widgets.find((item) => typeof item.value === "string" && item.value.replaceAll("\\", "/") === model.name);
+    || widgets.find((item) => typeof item.value === "string" && item.value.replaceAll("\\", "/") === model.name)
+    || widgets.find((item) => modelValueContains(item.value, model.name));
+}
+
+function modelValueContains(value, target) {
+  if (typeof value === "string") {
+    return modelValueMatches(value, target);
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => modelValueContains(item, target));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).some((item) => modelValueContains(item, target));
+  }
+  return false;
+}
+
+function modelValueMatches(value, target) {
+  const normalizedValue = normalizedModelValue(value);
+  const normalizedTarget = normalizedModelValue(target);
+  if (!normalizedValue || !normalizedTarget) return false;
+  return normalizedValue === normalizedTarget
+    || normalizedValue.split("/").pop()?.toLowerCase() === normalizedTarget.split("/").pop()?.toLowerCase();
+}
+
+function replaceModelValue(value, target, replacement) {
+  if (typeof value === "string") {
+    return modelValueMatches(value, target)
+      ? { value: replacement, changed: true }
+      : { value, changed: false };
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((item) => {
+      const result = replaceModelValue(item, target, replacement);
+      changed = changed || result.changed;
+      return result.value;
+    });
+    return { value: changed ? next : value, changed };
+  }
+  if (value && typeof value === "object") {
+    let changed = false;
+    const next = {};
+    for (const [key, item] of Object.entries(value)) {
+      const result = replaceModelValue(item, target, replacement);
+      changed = changed || result.changed;
+      next[key] = result.value;
+    }
+    return { value: changed ? next : value, changed };
+  }
+  return { value, changed: false };
 }
 
 async function applyMatch(model) {
@@ -366,7 +416,8 @@ async function applyMatch(model) {
     if (Array.isArray(widget.options?.values) && !widget.options.values.includes(model.match.name)) {
       widget.options.values.push(model.match.name);
     }
-    widget.value = model.match.name;
+    const nested = replaceModelValue(widget.value, model.name, model.match.name);
+    widget.value = nested.changed ? nested.value : model.match.name;
     if (typeof widget.callback === "function") {
       await Promise.resolve(widget.callback(widget.value, app.canvas, node, [0, 0], {}));
     }
@@ -375,11 +426,12 @@ async function applyMatch(model) {
     node.setDirtyCanvas?.(true, true);
     app.graph?.setDirtyCanvas?.(true, true);
     app.canvas?.setDirty?.(true, true);
-    const applied = normalizedModelValue(widget.value) === normalizedModelValue(model.match.name);
+    const applied = normalizedModelValue(widget.value) === normalizedModelValue(model.match.name)
+      || modelValueContains(widget.value, model.match.name);
     if (applied) {
       confirmedModelSelections.set(
         modelSelectionKey(node.id, widget.name),
-        normalizedModelValue(widget.value),
+        normalizedModelValue(widget.value) || normalizedModelValue(model.match.name),
       );
     }
     return applied;
