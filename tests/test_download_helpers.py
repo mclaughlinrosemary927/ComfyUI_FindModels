@@ -35,6 +35,7 @@ from ComfyUI_FindModels.find_models import (
     QUARK_MODEL_LIBRARIES,
     _allowed_download_url,
     _allowed_quark_download_url,
+    _annotate_registered_widget_categories,
     _clear_filename_cache,
     _choose_external_folder,
     _content_range_total,
@@ -212,6 +213,39 @@ class DownloadHelperTests(unittest.TestCase):
             folder_paths.get_filename_list = original_get_filename_list
 
         self.assertEqual(category, "clip")
+
+    def test_scan_annotation_resolves_clip_gguf_from_registered_node_folder(self):
+        class ClipLoaderGGUF:
+            @classmethod
+            def INPUT_TYPES(cls):
+                return {"required": {"clip_name": (["Z-Image-Engineer-V6-Q8_0.gguf"],)}}
+
+        nodes = types.ModuleType("nodes")
+        nodes.NODE_CLASS_MAPPINGS = {"CLIPLoader (GGUF)": ClipLoaderGGUF}
+        original_get_filename_list = folder_paths.get_filename_list
+        folder_paths.get_filename_list = lambda category: (
+            ["Z-Image-Engineer-V6-Q8_0.gguf"] if category == "clip" else []
+        )
+        payload = {
+            "nodes": [{
+                "id": 75,
+                "type": "CLIPLoader (GGUF)",
+                "widgets": [{"name": "clip_name", "value": "Z-Image-Engineer-V6-Q8_0.gguf"}],
+            }]
+        }
+        try:
+            with patch.dict(sys.modules, {"nodes": nodes}):
+                annotated = _annotate_registered_widget_categories(payload)
+                result = scan_models.__globals__["analyze"](
+                    annotated,
+                    folder_paths.get_filename_list,
+                    folder_paths.folder_names_and_paths.keys(),
+                )
+        finally:
+            folder_paths.get_filename_list = original_get_filename_list
+
+        self.assertEqual(annotated["nodes"][0]["widgets"][0]["directory"], "clip")
+        self.assertEqual(result["models"], [])
 
     def test_supports_legacy_comfyui_folder_aliases(self):
         original = folder_paths.get_folder_paths

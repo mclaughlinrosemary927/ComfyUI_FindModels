@@ -288,7 +288,7 @@ def _registered_category(value: Any) -> str | None:
     return next((str(category) for category in registered if str(category).lower() == name.lower()), None)
 
 
-def _node_registered_category(node_type: Any, widget_name: Any) -> str | None:
+def _node_registered_category(node_type: Any, widget_name: Any, widget_value: Any = None) -> str | None:
     """Resolve a model category from the installed node's actual INPUT_TYPES registration."""
     try:
         import nodes
@@ -298,14 +298,30 @@ def _node_registered_category(node_type: Any, widget_name: Any) -> str | None:
     except Exception:
         return None
     widget = str(widget_name or "")
-    spec = next(
-        (
-            section.get(widget)
-            for section in (input_types.get("required", {}), input_types.get("optional", {}))
-            if isinstance(section, dict) and widget in section
-        ),
-        None,
+    sections = tuple(
+        section
+        for section in (input_types.get("required", {}), input_types.get("optional", {}))
+        if isinstance(section, dict)
     )
+    spec = next((section.get(widget) for section in sections if widget in section), None)
+    if spec is None and isinstance(widget_value, str):
+        normalized_value = normalize_path(widget_value).lower()
+        spec = next(
+            (
+                candidate
+                for section in sections
+                for candidate in section.values()
+                if isinstance(candidate, (tuple, list))
+                and candidate
+                and isinstance(candidate[0], (tuple, list))
+                and normalized_value in {
+                    normalize_path(str(item)).lower()
+                    for item in candidate[0]
+                    if isinstance(item, str)
+                }
+            ),
+            None,
+        )
     values = spec[0] if isinstance(spec, (tuple, list)) and spec else None
     if isinstance(values, (tuple, list)):
         normalized = {normalize_path(str(item)).lower() for item in values if isinstance(item, str)}
@@ -336,9 +352,26 @@ def _node_registered_category(node_type: Any, widget_name: Any) -> str | None:
     return next(iter(categories)) if len(categories) == 1 else None
 
 
+def _annotate_registered_widget_categories(payload: Any) -> Any:
+    """Attach actual ComfyUI model folder categories before model_finder analyzes widgets."""
+    if not isinstance(payload, dict):
+        return payload
+    for node in payload.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        node_type = node.get("type") or node.get("class_type")
+        for widget in node.get("widgets", []):
+            if not isinstance(widget, dict) or widget.get("directory"):
+                continue
+            category = _node_registered_category(node_type, widget.get("name"), widget.get("value"))
+            if category:
+                widget["directory"] = category
+    return payload
+
+
 def _resolve_model_category(model: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
     current_value = str(model.get("category") or "unknown")
-    node_category = _node_registered_category(model.get("node_type"), model.get("widget"))
+    node_category = _node_registered_category(model.get("node_type"), model.get("widget"), model.get("name"))
     if node_category:
         return node_category
     current = _registered_category(current_value)
@@ -788,7 +821,7 @@ async def _quark_candidates(
 
 @PromptServer.instance.routes.post("/findmodels/scan")
 async def scan_models(request: web.Request) -> web.Response:
-    payload = await request.json()
+    payload = _annotate_registered_widget_categories(await request.json())
     quick = bool(payload.get("quick"))
     registered_categories = getattr(folder_paths, "folder_names_and_paths", {})
     result = analyze(

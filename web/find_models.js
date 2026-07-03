@@ -21,6 +21,23 @@ function normalizedModelValue(value) {
   return typeof value === "string" ? value.replaceAll("\\", "/").replace(/^\/+/, "") : "";
 }
 
+function collectModelValues(value, output = []) {
+  if (typeof value === "string") {
+    if (/\.(bin|ckpt|gguf|onnx|pt|pt2|pth|pkl|safetensors|sft)$/i.test(value)) {
+      output.push(value);
+    }
+    return output;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectModelValues(item, output));
+    return output;
+  }
+  if (value && typeof value === "object") {
+    Object.values(value).forEach((item) => collectModelValues(item, output));
+  }
+  return output;
+}
+
 function modelSelectionKey(nodeId, widgetName) {
   return `${String(nodeId)}:${String(widgetName || "")}`;
 }
@@ -108,7 +125,7 @@ function isExplicitModelWidget(name) {
     "ckpt_name", "checkpoint_name", "lora_name", "vae_name", "control_net_name",
     "controlnet_name", "clip_name", "clip_vision", "clip_vision_name", "text_encoder_name",
     "unet_name", "diffusion_model", "diffusion_model_name", "upscale_model",
-    "upscale_model_name", "embedding_name",
+    "upscale_model_name", "embedding_name", "lora", "loras", "lycoris", "lycorises",
   ]);
   return exact.has(normalized)
     || /^(?:lora|lycoris)_?\d+$/.test(normalized)
@@ -142,8 +159,8 @@ function workflowSnapshot() {
       }
       const widgetsValues = serialized?.widgets_values || [];
       const selectedValues = new Set([
-        ...(Array.isArray(widgetsValues) ? widgetsValues : Object.values(widgetsValues)),
-        ...(node.widgets || []).map((widget) => widget.value),
+        ...collectModelValues(widgetsValues),
+        ...(node.widgets || []).flatMap((widget) => collectModelValues(widget.value)),
       ].filter((value) => typeof value === "string"));
       const properties = serialized?.properties || node.properties || {};
       const packageId = [properties.aux_id, properties.cnr_id, properties.package_id]
@@ -177,16 +194,26 @@ function workflowSnapshot() {
             typeof value === "string" && /\.(bin|ckpt|gguf|onnx|pt|pth|safetensors|sft)$/i.test(value)
           );
           const isAsset = widget.type === "asset";
+          const nestedModelValues = collectModelValues(widget.value);
           const isModelSelector = isAsset || hasModelOptions || isExplicitModelWidget(widget.name)
-            || (isModelNodeType(node.type) && typeof widget.value === "string"
-              && /\.(bin|ckpt|gguf|onnx|pt|pt2|pth|pkl|safetensors|sft)$/i.test(widget.value));
+            || (isModelNodeType(node.type) && nestedModelValues.length > 0);
           const normalizedValue = normalizedModelValue(widget.value) || null;
+          const normalizedNestedValues = nestedModelValues
+            .map((value) => normalizedModelValue(value))
+            .filter(Boolean);
           const selectionKey = modelSelectionKey(node.id, widget.name);
           const confirmedValue = confirmedModelSelections.get(selectionKey);
-          if (confirmedValue && confirmedValue !== normalizedValue) {
+          if (
+            confirmedValue
+            && confirmedValue !== normalizedValue
+            && !normalizedNestedValues.includes(confirmedValue)
+          ) {
             confirmedModelSelections.delete(selectionKey);
           }
-          const modelValueValid = confirmedValue === normalizedValue && normalizedValue !== null
+          const modelValueValid = (
+            confirmedValue
+            && (confirmedValue === normalizedValue || normalizedNestedValues.includes(confirmedValue))
+          )
             ? true
             : hasModelOptions && normalizedValue !== null
             ? values.some((value) =>

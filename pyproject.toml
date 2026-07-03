@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-findmodels"
-version = "1.26.6"
+version = "1.26.7"
 description = "Find and adapt missing models in the current ComfyUI workflow"
 readme = "README.md"
 requires-python = ">=3.10"
