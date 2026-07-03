@@ -210,15 +210,21 @@ function workflowSnapshot() {
           ) {
             confirmedModelSelections.delete(selectionKey);
           }
+          const optionValueValid = hasModelOptions && (
+            (normalizedValue !== null && values.some((value) =>
+              typeof value === "string" && normalizedModelValue(value) === normalizedValue
+            ))
+            || normalizedNestedValues.some((nestedValue) => values.some((value) =>
+              typeof value === "string" && normalizedModelValue(value) === nestedValue
+            ))
+          );
           const modelValueValid = (
             confirmedValue
             && (confirmedValue === normalizedValue || normalizedNestedValues.includes(confirmedValue))
           )
             ? true
-            : hasModelOptions && normalizedValue !== null
-            ? values.some((value) =>
-              typeof value === "string" && normalizedModelValue(value) === normalizedValue
-            )
+            : optionValueValid
+            ? true
             : null;
           const modelMetadata = (node.properties?.models || []).find((model) =>
             typeof widget.value === "string" && model.name === widget.value

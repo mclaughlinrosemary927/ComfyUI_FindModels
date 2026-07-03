@@ -446,6 +446,8 @@ def match_reference(reference: Reference, installed: dict[str, list[str]]) -> di
     for category, candidate in candidates:
         candidate_path = normalize_path(candidate)
         candidate_base = basename(candidate_path)
+        if reference.official_valid and candidate_base.lower() == wanted_base:
+            return {"status": "installed", "match": None}
         if candidate_path.lower() == wanted_path:
             if category in official_categories:
                 return {"status": "installed", "match": None}
