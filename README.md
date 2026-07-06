@@ -65,12 +65,49 @@ No extra Python packages are required.
 
 ## GitHub Sync
 
-Use these commands on another computer for first-time setup:
+### First-time setup on another computer
+
+Install these tools first:
+
+- [Git for Windows](https://git-scm.com/download/win)
+- Python 3.10 or newer
+- Node.js, optional but recommended for frontend syntax checks
+
+Clone the project into ComfyUI's `custom_nodes` folder:
 
 ```powershell
 cd path\to\ComfyUI\custom_nodes
 git clone https://github.com/mclaughlinrosemary927/ComfyUI_FindModels.git
 cd ComfyUI_FindModels
+```
+
+Run the local development check:
+
+```powershell
+.\scripts\setup-dev.bat
+```
+
+Restart ComfyUI after the clone. If the browser already has ComfyUI open, press
+`Ctrl+F5` once so the frontend extension is loaded fresh.
+
+### Daily workflow
+
+Before editing on a computer, pull the latest code:
+
+```powershell
+.\scripts\pull.bat
+```
+
+After editing, run the environment check:
+
+```powershell
+.\scripts\setup-dev.bat
+```
+
+Then upload your changes:
+
+```powershell
+.\scripts\push.bat
 ```
 
 Daily pull from GitHub:
@@ -94,6 +131,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\push.ps1 "Fix model detection
 The upload script runs the Python tests, checks `web/find_models.js`, stages all tracked
 and untracked project files, commits, and pushes. The pull script refuses to pull when
 there are local uncommitted changes, so work on another computer is not overwritten.
+The setup script checks Git, Python, optional Node.js, Python tests, frontend syntax,
+Python syntax, and whitespace.
 
 Local runtime files such as `models/`, `external_model_folder.json`, `quark_auth.json`,
 `__pycache__/`, and `.pytest_cache/` are intentionally ignored and are not uploaded.
