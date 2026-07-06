@@ -54,7 +54,7 @@ Clone this repository into `ComfyUI/custom_nodes`:
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/YOUR_NAME/ComfyUI_FindModels.git
+git clone https://github.com/mclaughlinrosemary927/ComfyUI_FindModels.git
 ```
 
 Restart ComfyUI. A persistent **查找模型** button appears after the active-task control
@@ -62,6 +62,41 @@ and before the property-panel toggle. The panel stays closed during startup and 
 inside ComfyUI's native resizable right-side panel when opened.
 
 No extra Python packages are required.
+
+## GitHub Sync
+
+Use these commands on another computer for first-time setup:
+
+```powershell
+cd path\to\ComfyUI\custom_nodes
+git clone https://github.com/mclaughlinrosemary927/ComfyUI_FindModels.git
+cd ComfyUI_FindModels
+```
+
+Daily pull from GitHub:
+
+```powershell
+.\scripts\pull.bat
+```
+
+Daily upload to GitHub:
+
+```powershell
+.\scripts\push.bat
+```
+
+You can also pass a custom commit message:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\push.ps1 "Fix model detection"
+```
+
+The upload script runs the Python tests, checks `web/find_models.js`, stages all tracked
+and untracked project files, commits, and pushes. The pull script refuses to pull when
+there are local uncommitted changes, so work on another computer is not overwritten.
+
+Local runtime files such as `models/`, `external_model_folder.json`, `quark_auth.json`,
+`__pycache__/`, and `.pytest_cache/` are intentionally ignored and are not uploaded.
 
 ## Usage
 
