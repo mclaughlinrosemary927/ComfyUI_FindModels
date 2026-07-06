@@ -98,6 +98,10 @@ there are local uncommitted changes, so work on another computer is not overwrit
 Local runtime files such as `models/`, `external_model_folder.json`, `quark_auth.json`,
 `__pycache__/`, and `.pytest_cache/` are intentionally ignored and are not uploaded.
 
+When continuing this project in a fresh Codex conversation on another computer, read
+`AGENTS.md` first, then `PROJECT_CONTEXT.md`. GitHub cannot restore previous chat
+history, but these files preserve the project rules, current state, and next steps.
+
 ## Usage
 
 1. Open or drag a workflow into ComfyUI.
