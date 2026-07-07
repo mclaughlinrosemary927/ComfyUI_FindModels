@@ -498,6 +498,11 @@ def analyze(
         for item in results
         if item["status"] == "installed"
     }
+    exact_resolved: dict[str, set[tuple[str | None, str | None]]] = {}
+    for item in results:
+        if item["status"] == "installed" and item["node_id"] is not None and item["widget"] is not None:
+            key = item["name"].lower()
+            exact_resolved.setdefault(key, set()).add((item["node_id"], item["widget"]))
     unresolved_by_name: dict[str, dict[str, Any]] = {}
     for item in results:
         if item["status"] not in {"adaptable", "missing"}:
@@ -505,6 +510,11 @@ def analyze(
         if (
             (item["node_id"], item["widget"]) in resolved_widgets
             or (item["category"], basename(item["name"]).lower()) in resolved_models
+        or (item["name"].lower(), item["node_id"], item["widget"]) in {
+                (name, nid, wid)
+                for name, entries in exact_resolved.items()
+                for nid, wid in entries
+            }
         ):
             continue
         key = item["name"].lower()
