@@ -138,7 +138,14 @@ https://pan.quark.cn/s/4680ac866516
 
 - 把上下文写入 `AGENTS.md`、`PROJECT_CONTEXT.md`、`PROJECT_CONVERSATION_SUMMARY.md`。
 - 把一键上传和拉取脚本放入 `scripts/`。
+- 新增 `CODEX_START_HERE.md` 和 `scripts/codex-context.bat`，用于在新电脑复制接续提示。
 - 新电脑克隆仓库后，新 Codex 会话读取这些文件继续开发。
+
+可确认的限制：
+
+- 当前 Codex 没有“从 GitHub 导入旧对话到新电脑对话列表”的公开接口。
+- `fork_thread` 只能复制当前机器现有线程，不能通过 GitHub 跨电脑恢复。
+- 因此“新电脑显示旧聊天气泡”不能通过项目代码实现；能实现的是“新电脑新会话读取项目上下文并继续开发”。
 
 ## 当前开发原则
 

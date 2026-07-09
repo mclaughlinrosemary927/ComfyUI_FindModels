@@ -7,6 +7,16 @@
 GitHub 只能同步项目文件，不能让另一台电脑的 Codex / ChatGPT 界面直接显示本机旧对话记录。
 本项目采用可迁移上下文方案：把关键对话、决策、版本状态、用户偏好和开发规则写入仓库文件。新电脑拉取仓库后，Codex 读取这些文件即可继续开发，但不会在界面中还原旧聊天气泡。
 
+当前 Codex 可用的线程能力包括创建、读取、fork、重命名、归档线程；没有“从 GitHub 导入旧对话到另一台电脑对话列表”的公开接口。`fork` 只能复制当前机器上已有线程的历史，不能通过 GitHub 跨电脑恢复旧聊天 UI。
+
+因此本项目的可执行方案是：
+
+1. 把上下文文件提交到 GitHub。
+2. 新电脑克隆仓库。
+3. 运行 `scripts\codex-context.bat`，它会把接续提示复制到剪贴板。
+4. 在新电脑 Codex 中打开本项目的新会话，把提示粘贴进去。
+5. 新会话读取 `AGENTS.md`、`PROJECT_CONTEXT.md`、`PROJECT_CONVERSATION_SUMMARY.md` 后继续工作。
+
 必须读取的上下文文件：
 
 - `AGENTS.md`：开发约定和项目规则。
@@ -133,7 +143,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\pull.ps1
 git clone https://github.com/mclaughlinrosemary927/ComfyUI_FindModels.git
 cd ComfyUI_FindModels
 .\scripts\setup-dev.bat
+.\scripts\codex-context.bat
 ```
+
+`codex-context.bat` 会把新会话接续提示复制到剪贴板。把它粘贴到新电脑的 Codex 新会话中，即可恢复项目上下文。
 
 ## 验证命令
 

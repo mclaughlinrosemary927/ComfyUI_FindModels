@@ -59,7 +59,12 @@
 git clone https://github.com/mclaughlinrosemary927/ComfyUI_FindModels.git
 cd ComfyUI_FindModels
 .\scripts\setup-dev.bat
+.\scripts\codex-context.bat
 ```
+
+`codex-context.bat` 会把新会话接续提示复制到剪贴板。新电脑打开 Codex 项目后，把剪贴板内容粘贴到新会话第一条消息中。
+
+限制说明：GitHub 不能把旧 Codex 对话气泡导入另一台电脑的 UI，也不能让项目列表自动显示旧聊天。当前可靠做法是同步上下文文件，并用 `CODEX_START_HERE.md` / `codex-context.bat` 让新会话接上项目。
 
 继续开发前：
 
