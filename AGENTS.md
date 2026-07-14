@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件给后续 Codex / 开发者使用。新会话处理本项目时，必须先读本文件，再读 `PROJECT_CONTEXT.md` 和 `PROJECT_CONVERSATION_SUMMARY.md`。
+本文件给后续 Codex / 开发者使用。新会话处理本项目时，必须先读本文件，再读 `PROJECT_CONTEXT.md`、`CONVERSATION_CONTEXT.md`、必要时继续读 `PROJECT_CONVERSATION_SUMMARY.md`，然后读当前源码。
 
 ## 重要现实限制
 
@@ -13,15 +13,16 @@ GitHub 只能同步项目文件，不能让另一台电脑的 Codex / ChatGPT �
 
 1. 把上下文文件提交到 GitHub。
 2. 新电脑克隆仓库。
-3. 运行 `scripts\codex-context.bat`，它会把接续提示复制到剪贴板。
-4. 在新电脑 Codex 中打开本项目的新会话，把提示粘贴进去。
-5. 新会话读取 `AGENTS.md`、`PROJECT_CONTEXT.md`、`PROJECT_CONVERSATION_SUMMARY.md` 后继续工作。
+3. 在 Codex 添加这个项目。
+4. 项目下面如果显示“暂无对话”，手动新建一条对话。
+5. 第一条消息发送：`继续这个项目。先读取 AGENTS.md、PROJECT_CONTEXT.md、CONVERSATION_CONTEXT.md 和当前源码，理解项目背景、历史问题、用户偏好和安全规则，然后检查 git 状态。`
 
 必须读取的上下文文件：
 
 - `AGENTS.md`：开发约定和项目规则。
 - `PROJECT_CONTEXT.md`：当前版本、已完成功能、验证方法、GitHub 使用方法。
-- `PROJECT_CONVERSATION_SUMMARY.md`：历史对话和需求演进摘要，用来恢复项目语境。
+- `CONVERSATION_CONTEXT.md`：新电脑 / 新会话接续入口和第一条消息流程。
+- `PROJECT_CONVERSATION_SUMMARY.md`：历史对话和需求演进摘要，用来恢复更完整的项目语境。
 
 ## 工作约定
 
@@ -29,6 +30,7 @@ GitHub 只能同步项目文件，不能让另一台电脑的 Codex / ChatGPT �
 - 安装依赖时优先用 `pnpm`。
 - 添加新的生产依赖前先询问确认。
 - 用户明确要求“上传 GitHub”“提交”“打标签”时，才执行 commit / push / tag。
+- 本项目使用 GitHub Pull Request 工作流：需要上传 GitHub 的改动默认创建 `codex/...` 分支、提交、推送分支并创建 PR，不直接推送到 `main`；除非用户明确要求直接推送。
 - 不要删除用户本地模型、Cookie、账号登录态、运行时配置和下载中的文件。
 - 不要伪造 Quark 或其他下载源成功；失败必须说明真实原因。
 
@@ -146,7 +148,7 @@ cd ComfyUI_FindModels
 .\scripts\codex-context.bat
 ```
 
-`codex-context.bat` 会把新会话接续提示复制到剪贴板。把它粘贴到新电脑的 Codex 新会话中，即可恢复项目上下文。
+也可以在 Codex 添加项目后，如果项目下面显示“暂无对话”，手动新建一条对话，并把 `CODEX_START_HERE.md` 里的第一条消息粘贴进去。`codex-context.bat` 会把同一条接续提示复制到剪贴板。
 
 ## 验证命令
 
@@ -200,7 +202,14 @@ git status --short --branch --untracked-files=all
 
 ## Git 和发布
 
+- 本项目使用 GitHub Pull Request 工作流。
 - 文档或脚本更新可以普通 commit，不需要打版本标签。
+- 需要上传 GitHub 时，默认流程是：
+  1. 从最新 `main` 创建 `codex/...` 工作分支。
+  2. 提交本地改动。
+  3. 推送该工作分支。
+  4. 创建 Pull Request。
+- 不要直接推送到 `main`，除非用户明确要求。
 - 发布版本时更新：
   - `pyproject.toml`
   - `README.md`

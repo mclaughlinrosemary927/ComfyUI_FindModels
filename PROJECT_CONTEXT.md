@@ -49,7 +49,7 @@
 - 模型必须按 ComfyUI 官方注册目录存放，不允许按节点文本路径乱建目录。
 - 外部模型库必须优先递归精确查找。
 - Quark 能用则用，但不能伪造直链成功。
-- 修改后如果用户要求上传 GitHub，必须提交并推送。
+- 本项目使用 GitHub Pull Request 工作流。修改后如果用户要求上传 GitHub，默认新建 `codex/...` 分支、提交、推送分支并创建 PR；不直接推送到 `main`，除非用户明确要求。
 
 ## 新电脑恢复开发流程
 
@@ -62,7 +62,14 @@ cd ComfyUI_FindModels
 .\scripts\codex-context.bat
 ```
 
-`codex-context.bat` 会把新会话接续提示复制到剪贴板。新电脑打开 Codex 项目后，把剪贴板内容粘贴到新会话第一条消息中。
+Codex 内的正确流程：
+
+1. `git clone` 项目。
+2. 在 Codex 添加这个项目。
+3. 项目下面如果显示“暂无对话”，手动新建一条对话。
+4. 第一条消息发送：`继续这个项目。先读取 AGENTS.md、PROJECT_CONTEXT.md、CONVERSATION_CONTEXT.md 和当前源码，理解项目背景、历史问题、用户偏好和安全规则，然后检查 git 状态。`
+
+`codex-context.bat` 会把这条新会话接续提示复制到剪贴板。
 
 限制说明：GitHub 不能把旧 Codex 对话气泡导入另一台电脑的 UI，也不能让项目列表自动显示旧聊天。当前可靠做法是同步上下文文件，并用 `CODEX_START_HERE.md` / `codex-context.bat` 让新会话接上项目。
 
@@ -84,15 +91,19 @@ cd ComfyUI_FindModels
 powershell -ExecutionPolicy Bypass -File .\scripts\push.ps1 "Fix model detection"
 ```
 
+注意：项目当前协作方式是 GitHub Pull Request。上传 GitHub 时优先走分支 + PR，不直接推送到 `main`；旧的一键上传脚本只在用户明确要求直接推送时使用。
+
 ## 新会话接续步骤
 
 1. 读取 `AGENTS.md`。
 2. 读取 `PROJECT_CONTEXT.md`。
-3. 读取 `PROJECT_CONVERSATION_SUMMARY.md`。
-4. 执行 `git status --short --branch`。
-5. 如果用户继续修 bug，先读相关测试，再读实现文件。
-6. 修改后运行验证命令。
-7. 只有用户明确要求上传时，才 commit / push。
+3. 读取 `CONVERSATION_CONTEXT.md`。
+4. 读取当前源码和测试；需要更完整历史时继续读取 `PROJECT_CONVERSATION_SUMMARY.md`。
+5. 执行 `git status --short --branch`。
+6. 如果用户继续修 bug，先读相关测试，再读实现文件。
+7. 修改后运行验证命令。
+8. 只有用户明确要求上传时，才 commit / push / 创建 PR。
+9. 上传 GitHub 默认走 Pull Request：创建 `codex/...` 分支、提交、推送分支、创建 PR；不直接推送到 `main`，除非用户明确要求。
 
 ## 验证命令
 
